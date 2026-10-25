@@ -78,11 +78,26 @@ export function presetNote(p, settings) {
 const UNDO_LIMIT = 100;
 
 function emptyTally() {
-	return { judges: [[null, null], [null, null], [null, null]], published: false, votes: [0, 0], tieWinner: null };
+	return { judges: [[null, null], [null, null], [null, null]], published: false, votes: [0, 0], averages: [0, 0], tieWinner: null };
 }
 
 /** At least this many line judges must report before a Unity result can be published. */
 export const MIN_JUDGES = 2;
+
+/**
+ * The whole-number scores to record (and enter in Challonge): the averages
+ * rounded, but never leaving the winner level with or behind the loser.
+ * With no winner (a tie) both get the same score.
+ */
+export function recordScores(averages, winner) {
+	const scores = averages.map(a => Math.round(a));
+	if (winner === null) {
+		const level = Math.round((averages[0] + averages[1]) / 2);
+		return [level, level];
+	}
+	if (scores[winner] <= scores[1 - winner]) scores[winner] = scores[1 - winner] + 1;
+	return scores;
+}
 
 /**
  * What the judges reported. Each judge who gave both scores casts a vote for
@@ -93,10 +108,13 @@ export const MIN_JUDGES = 2;
 export function tallyResult(s) {
 	const done = s.tally.judges.filter(j => j.every(v => v !== null));
 	const avg = i => (done.length ? Math.round(done.reduce((sum, j) => sum + j[i], 0) / done.length * 10) / 10 : 0);
+	const votes = [0, 1].map(i => done.filter(j => j[i] > j[1 - i]).length);
+	const averages = [avg(0), avg(1)];
 	return {
 		reported: done.length,
-		averages: [avg(0), avg(1)],
-		votes: [0, 1].map(i => done.filter(j => j[i] > j[1 - i]).length),
+		averages,
+		votes,
+		scores: recordScores(averages, votes[0] === votes[1] ? null : votes[0] > votes[1] ? 0 : 1),
 	};
 }
 
@@ -445,15 +463,16 @@ export class Store {
 	publishTally() {
 		if (!this.tallyComplete() || this.state.tally.published) return false;
 		return this.apply(s => {
-			const { averages, votes } = tallyResult(s);
-			s.fighters.forEach((f, i) => { f.score = averages[i]; });
+			const { averages, votes, scores } = tallyResult(s);
+			s.fighters.forEach((f, i) => { f.score = scores[i]; });
 			s.tally.votes = votes;
+			s.tally.averages = averages;
 			s.tally.published = true;
 			s.showWinner = true;
 			// Judges report once the round is over, so publishing closes the clock.
 			s.remaining = 0;
 			s.startedAt = null;
-			this.#logEvent(s, 'tally-published');
+			this.#logEvent(s, 'tally-published', { votes });
 		}, { clock: true });
 	}
 
@@ -464,6 +483,7 @@ export class Store {
 			s.fighters.forEach(f => { f.score = 0; });
 			s.tally.published = false;
 			s.tally.votes = [0, 0];
+			s.tally.averages = [0, 0];
 			s.tally.tieWinner = null;
 			this.#logEvent(s, 'tally-unpublished');
 		}, { clock: true });
@@ -474,6 +494,8 @@ export class Store {
 		return this.apply(s => {
 			if (!s.tally.published || s.tally.votes[0] !== s.tally.votes[1]) return false;
 			s.tally.tieWinner = side;
+			// The sudden-death winner gets the higher recorded score.
+			recordScores(s.tally.averages, side).forEach((v, i) => { s.fighters[i].score = v; });
 			this.#logEvent(s, 'tie-broken', { side });
 		});
 	}
@@ -563,6 +585,7 @@ export class Store {
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
 			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
 			s.tally.votes = [...s.tally.votes].reverse();
+			s.tally.averages = [...s.tally.averages].reverse();
 			if (s.tally.tieWinner !== null) s.tally.tieWinner = 1 - s.tally.tieWinner;
 			for (const e of s.log) {
 				e.scores = [...e.scores].reverse();
@@ -702,7 +725,7 @@ export function describeEvent(s, e) {
 		return 'Simul';
 	}
 	case 'time-up': return 'Time up';
-	case 'tally-published': return `Judges' tally published (average ${e.scores[0]}–${e.scores[1]})`;
+	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
 	case 'tally-unpublished': return 'Tally taken back';
 	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
 	case 'final-exchange': return 'Final exchange';

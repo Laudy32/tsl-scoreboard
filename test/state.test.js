@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, leader,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, leader,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -446,9 +446,9 @@ test('unity: judges enter tallies privately, then publish to reveal the winner',
 	assert.equal(store.tallyComplete(), true, 'two judges are enough');
 	assert.deepEqual(s().fighters.map(f => f.score), [0, 0], 'nothing shows before publishing');
 	enter(store, 2, 8, 6);
-	assert.deepEqual(tallyResult(s()), { reported: 3, averages: [7, 5.3], votes: [3, 0] });
+	assert.deepEqual(tallyResult(s()), { reported: 3, averages: [7, 5.3], votes: [3, 0], scores: [7, 5] });
 	assert.equal(store.publishTally(), true);
-	assert.deepEqual(s().fighters.map(f => f.score), [7, 5.3], 'the average is kept as the score');
+	assert.deepEqual(s().fighters.map(f => f.score), [7, 5], 'the rounded average is kept as the score');
 	assert.equal(leader(s()), 0);
 	assert.equal(timeLeft(s()), 0);
 	assert.equal(store.setTally(0, 0, 1), false, 'locked once published');
@@ -467,7 +467,17 @@ test('unity: the winner follows the judges\' votes, not the average', () => {
 	assert.deepEqual(r.votes, [2, 1]);
 	store.publishTally();
 	assert.equal(leader(s()), 0, 'two judges voted Blue');
-	assert.deepEqual(s().fighters.map(f => f.score), r.averages);
+	assert.deepEqual(r.scores, [16, 15], 'averages 2.7 and 15 round to 3 and 15, but the winner is recorded ahead');
+	assert.deepEqual(s().fighters.map(f => f.score), [16, 15]);
+	assert.equal(s().fighters[0].score > s().fighters[1].score, true);
+});
+
+test('recorded scores are whole numbers with the winner ahead', () => {
+	assert.deepEqual(recordScores([7, 5.3], 0), [7, 5]);
+	assert.deepEqual(recordScores([5.4, 5.4], 1), [5, 6], 'level after rounding: the vote winner goes up one');
+	assert.deepEqual(recordScores([5.6, 5.5], 0), [7, 6], 'both round to 6: the winner goes up one');
+	assert.deepEqual(recordScores([4, 9.4], 0), [10, 9]);
+	assert.deepEqual(recordScores([6.5, 5.5], null), [6, 6], 'a tie records level scores');
 });
 
 test('unity: a half-entered judge does not count, and a level judge casts no vote', () => {
@@ -486,9 +496,11 @@ test('unity: tied votes are a tie in pools, or the Marshal names a sudden-death 
 	store.publishTally();
 	assert.deepEqual(s().tally.votes, [1, 1]);
 	assert.equal(leader(s()), null);
+	assert.equal(s().fighters[0].score, s().fighters[1].score, 'a tie records level scores');
 	assert.equal(store.nextRoundAction(), 'next', 'pools can end in a tie');
 	assert.equal(store.setTieWinner(1), true);
 	assert.equal(leader(s()), 1);
+	assert.equal(s().fighters[1].score > s().fighters[0].score, true, 'the sudden-death winner is recorded ahead');
 	store.nextRound();
 	assert.equal(s().rounds[0].winner, 1);
 	assert.equal(s().fighters[1].wins, 1);

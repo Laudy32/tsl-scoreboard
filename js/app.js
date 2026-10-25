@@ -148,14 +148,13 @@ function switchPanel(s) {
 	</div>`;
 }
 
-/** Scores can be averages, so show a decimal only when there is one. */
-const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
-
 /** Unity: line judges report their silent tallies here; nothing shows on the display until it's published. */
 function tallyPanel(s) {
 	if (s.settings.liveScore) return '';
-	const { reported, averages, votes } = tallyResult(s);
+	const { reported, votes, scores } = tallyResult(s);
 	const locked = s.tally.published;
+	// Once published, the recorded scores are the fighters' own (a sudden-death winner can change them).
+	const shown = locked ? s.fighters.map(f => f.score) : scores;
 	const head = [0, 1].map(i => `<span class="tally-name" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))}</span>`).join('');
 	const rows = s.tally.judges.map((judge, j) => `<div class="tally-row"><span>Judge ${j + 1}${j >= MIN_JUDGES ? ' <small>(optional)</small>' : ''}</span>${[0, 1].map(i => {
 		const v = judge[i];
@@ -177,8 +176,8 @@ function tallyPanel(s) {
 		<h3>Judges' tally</h3>
 		<div class="tally-row tally-head"><span></span>${head}</div>
 		${rows}
-		<div class="tally-row tally-total"><span>Average</span><strong data-tally-total="0">${reported ? fmt(averages[0]) : '–'}</strong><strong data-tally-total="1">${reported ? fmt(averages[1]) : '–'}</strong></div>
-		<p class="fe-note" data-tally-votes>${reported ? `${voteText} (the winner follows the votes)` : 'Each judge counts as a vote for the winner.'}</p>
+		<div class="tally-row tally-total"><span>Score</span><strong data-tally-total="0">${reported ? shown[0] : '–'}</strong><strong data-tally-total="1">${reported ? shown[1] : '–'}</strong></div>
+		<p class="fe-note" data-tally-votes>${reported ? `${voteText}. The score is the judges' average, rounded so the winner is ahead.` : 'Each judge counts as a vote for the winner.'}</p>
 		${foot}
 	</section>`;
 }
@@ -288,7 +287,7 @@ function renderDisplay(s) {
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
 			<div class="d-name">${esc(fighterLabel(s, i))}</div>
 			${subtitle(f)}
-			${live ? `<div class="d-score">${fmt(f.score)}</div>` : ''}
+			${live ? `<div class="d-score">${s.settings.liveScore ? f.score : s.tally.votes[i]}</div>` : ''}
 			${dots(s, i)}
 		</div>`;
 	};
@@ -305,7 +304,7 @@ function renderDisplay(s) {
 			<div class="d-simul">
 				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
 				${s.settings.liveScore ? `<div class="d-label">Simul</div>
-				<div class="d-simul-n">${s.simul}</div>` : '<div class="d-label">vs</div>'}
+				<div class="d-simul-n">${s.simul}</div>` : `<div class="d-label">${s.tally.published ? 'Judge votes' : 'vs'}</div>`}
 			</div>
 			${side(1)}
 		</div>
@@ -444,10 +443,10 @@ const historyDialog = $('#history');
 // drop focus from the next field, so just refresh the totals and Publish.
 let tallyEditing = false;
 function refreshTally(s) {
-	const { reported, averages, votes } = tallyResult(s);
-	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? fmt(averages[+el.dataset.tallyTotal]) : '–';
+	const { reported, votes, scores } = tallyResult(s);
+	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? scores[+el.dataset.tallyTotal] : '–';
 	const note = $('[data-tally-votes]');
-	if (note) note.textContent = reported ? `Judge votes: ${votes[0]}–${votes[1]} (the winner follows the votes)` : 'Each judge counts as a vote for the winner.';
+	if (note) note.textContent = reported ? `Judge votes: ${votes[0]}–${votes[1]}. The score is the judges' average, rounded so the winner is ahead.` : 'Each judge counts as a vote for the winner.';
 	const publish = $('[data-action="publish"]');
 	if (publish) publish.disabled = !store.tallyComplete();
 }
