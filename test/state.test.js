@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize } from '../js/state.js';
+import {
+	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
+	activePreset, describeEvent,
+} from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
 
@@ -169,4 +172,106 @@ test('clock parsing and formatting', () => {
 test('normalize ignores old-format saves', () => {
 	assert.equal(normalize({ score1: 3 }).version, 2);
 	assert.equal(normalize({ version: 2, settings: { duration: 1000 } }).settings.simulCutoff, 3);
+});
+
+test('reaching the points target ends the round', () => {
+	const { store, s, advance } = setup({ pointsToWin: 3 });
+	store.start();
+	advance(20_000);
+	store.addPoint(1); store.addPoint(1); store.addPoint(0);
+	assert.equal(timeLeft(s(), store.now()), D - 20_000);
+	store.addPoint(1);
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(s().startedAt, null);
+	assert.equal(s().showWinner, true);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Red reached 3');
+	assert.equal(store.nextRoundAction(), 'next');
+	store.nextRound();
+	assert.equal(s().fighters[1].wins, 1);
+	assert.equal(s().remaining, D);
+});
+
+test('undoing the winning point gives the clock back, paused', () => {
+	const { store, s, advance } = setup({ pointsToWin: 2 });
+	store.start();
+	advance(30_000);
+	store.addPoint(0); store.addPoint(0);
+	advance(5_000);
+	store.undo();
+	assert.equal(s().fighters[0].score, 1);
+	assert.equal(s().startedAt, null);
+	assert.equal(s().remaining, D - 30_000);
+	assert.equal(s().stoppedAtTarget, null);
+});
+
+test('no points target means only the clock ends the round', () => {
+	const { store, s } = setup({ pointsToWin: 0 });
+	for (let i = 0; i < 15; i++) store.addPoint(0);
+	assert.equal(timeLeft(s()), D);
+});
+
+test('presets load their rules and are recognized', () => {
+	const { store, s } = setup();
+	assert.equal(activePreset(s().settings).id, 'standard');
+	store.applyPreset('two-minute');
+	assert.equal(s().settings.duration, 120_000);
+	assert.equal(s().remaining, 120_000, 'applies right away before the round starts');
+	assert.equal(s().settings.pointsToWin, 10);
+	store.applyPreset('unity');
+	assert.equal(s().remaining, 60_000);
+	assert.equal(activePreset(s().settings).id, 'unity');
+	store.updateSettings({ duration: 90_000 });
+	assert.equal(activePreset(s().settings), null, 'edited rules no longer match a preset');
+	assert.equal(store.applyPreset('nope'), false);
+});
+
+test('without a live score, scoring is off and rounds just move on', () => {
+	const { store, s } = setup();
+	store.applyPreset('unity');
+	assert.equal(store.addPoint(0), false);
+	assert.equal(store.addSimul(), false);
+	assert.equal(store.nextRoundAction(), null);
+	store.endRoundNow();
+	assert.equal(store.nextRoundAction(), 'next');
+	store.nextRound();
+	assert.equal(s().round, 2);
+	assert.equal(s().rounds[0].winner, null);
+	assert.equal(s().remaining, 60_000);
+});
+
+test('divisions: pick one, add custom ones once, remove them', () => {
+	const { store, s } = setup();
+	store.setDivision('Masters');
+	assert.equal(s().settings.division, 'Masters');
+	store.addCustomDivision('  Youth   Open ');
+	assert.equal(s().settings.division, 'Youth Open');
+	store.addCustomDivision('youth open');
+	store.addCustomDivision('exotics');
+	assert.deepEqual(s().settings.customDivisions, ['Youth Open'], 'no duplicates, built-ins not copied');
+	assert.equal(s().settings.division, 'Exotics');
+	assert.equal(store.addCustomDivision('   '), false);
+	store.setDivision('Youth Open');
+	store.removeCustomDivision('Youth Open');
+	assert.deepEqual(s().settings.customDivisions, []);
+	assert.equal(s().settings.division, '');
+});
+
+test('division and custom divisions survive new matches and undo', () => {
+	const { store, s } = setup();
+	store.addPoint(0);
+	store.addCustomDivision('Youth Open');
+	store.undo();
+	assert.equal(s().fighters[0].score, 0);
+	assert.equal(s().settings.division, 'Youth Open');
+	store.newMatch({ full: true });
+	assert.deepEqual(s().settings.customDivisions, ['Youth Open']);
+	assert.equal(s().settings.division, 'Youth Open');
+});
+
+test('older saves pick up the new settings', () => {
+	const st = normalize({ version: 2, settings: { duration: 150_000 } });
+	assert.equal(st.settings.pointsToWin, 10);
+	assert.equal(st.settings.liveScore, true);
+	assert.deepEqual(st.settings.customDivisions, []);
+	assert.equal(st.stoppedAtTarget, null);
 });

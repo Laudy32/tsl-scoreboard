@@ -1,6 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
+	MATCH_PRESETS, DIVISIONS, activePreset,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -72,6 +73,7 @@ function statusLine(s) {
 		return `<span class="status win" style="--c:${hex(s.fighters[mw].color)}">Match won by <strong>${esc(fighterLabel(s, mw))}</strong></span>`;
 	}
 	if (timeLeft(s) === 0) {
+		if (!s.settings.liveScore) return '<span class="status alert">Time up</span>';
 		if (!s.showWinner && !s.suddenDeath) return '<span class="status alert">Time up</span>';
 		const w = leader(s);
 		if (w === null) return '<span class="status alert">Tie</span>';
@@ -82,6 +84,22 @@ function statusLine(s) {
 	return '<span class="status muted">&nbsp;</span>';
 }
 
+/** One line for the rules in play, e.g. "Standard · 2:30, first to 10". */
+function rulesLine(s) {
+	const st = s.settings;
+	const p = activePreset(st);
+	if (p) return `${p.label} · ${p.note}`;
+	const parts = [formatClock(st.duration, { hundredths: false })];
+	if (!st.liveScore) parts.push('no live score');
+	else if (st.pointsToWin) parts.push(`first to ${st.pointsToWin}`);
+	return `Custom · ${parts.join(', ')}`;
+}
+
+/** The division banner shown above the clock, if one is picked. */
+function divisionHTML(s, cls) {
+	return s.settings.division ? `<div class="${cls}">${esc(s.settings.division)}</div>` : '';
+}
+
 /** The display font's digits differ in width, so each gets a fixed-width cell to keep the clock still. */
 function clockHTML(text) {
 	return [...text].map(c => (/\d/.test(c) ? `<span class="dg">${c}</span>` : c)).join('');
@@ -90,6 +108,9 @@ function clockHTML(text) {
 // --- control view ---
 
 function primaryButton(s) {
+	if (timeLeft(s) === 0 && !s.settings.liveScore) {
+		return '<button class="btn primary" data-action="next">Next round</button>';
+	}
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
@@ -99,6 +120,15 @@ function primaryButton(s) {
 
 function fighterPanel(s, side) {
 	const f = s.fighters[side];
+	if (!s.settings.liveScore) {
+		return `<div class="fighter" style="--c:${hex(f.color)}">
+			<div class="score-btn no-score">
+				<span class="name">${esc(fighterLabel(s, side))}</span>
+				${subtitle(f)}
+			</div>
+			${dots(s, side)}
+		</div>`;
+	}
 	const key = side === 0 ? ['Q', 'A'] : ['E', 'D'];
 	return `<div class="fighter" style="--c:${hex(f.color)}">
 		<button class="score-btn" data-action="point" data-side="${side}" aria-label="Add a point for ${esc(fighterLabel(s, side))}">
@@ -132,6 +162,10 @@ function renderControl(s) {
 		</div>
 	</header>
 	<main class="control">
+		<button class="match-line" data-action="settings">
+			${divisionHTML(s, 'division')}
+			<span class="rules">${esc(rulesLine(s))}</span>
+		</button>
 		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}" data-action="clock" aria-label="Start or pause the clock">
 			<span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span>
 		</button>
@@ -139,14 +173,14 @@ function renderControl(s) {
 
 		<div class="fighters">
 			${fighterPanel(s, 0)}
-			<div class="fighter simul">
+			${s.settings.liveScore ? `<div class="fighter simul">
 				<button class="score-btn" data-action="simul" aria-label="Add a simul">
 					<span class="name">Simul</span>
 					<span class="score">${s.simul}</span>
 					<span class="hint">${cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
 				</button>
 				<button class="btn minus" data-action="simul" data-delta="-1" ${s.simul ? '' : 'disabled'}>−1 <kbd>S</kbd></button>
-			</div>
+			</div>` : '<div class="fighter vs"><span>vs</span><small>No live score</small></div>'}
 			${fighterPanel(s, 1)}
 		</div>
 
@@ -154,7 +188,7 @@ function renderControl(s) {
 			${primaryButton(s)}
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
-				<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : 'Next round'} <kbd>N</kbd></button>
+				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : 'Next round'} <kbd>N</kbd></button>` : ''}
 				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>End round</button>
 			</div>
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
@@ -179,17 +213,19 @@ function renderControl(s) {
 // --- display view ---
 
 function renderDisplay(s) {
+	const live = s.settings.liveScore;
 	const side = i => {
 		const f = s.fighters[i];
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
 			<div class="d-name">${esc(fighterLabel(s, i))}</div>
 			${subtitle(f)}
-			<div class="d-score">${f.score}</div>
+			${live ? `<div class="d-score">${f.score}</div>` : ''}
 			${dots(s, i)}
 		</div>`;
 	};
-	return `<main class="display" data-action="fullscreen">
+	return `<main class="display${live ? '' : ' no-score'}" data-action="fullscreen">
 		<div class="d-top">
+			${divisionHTML(s, 'd-division')}
 			<div class="d-round">Round ${s.round}</div>
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
@@ -198,8 +234,8 @@ function renderDisplay(s) {
 			${side(0)}
 			<div class="d-simul">
 				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
-				<div class="d-label">Simul</div>
-				<div class="d-simul-n">${s.simul}</div>
+				${live ? `<div class="d-label">Simul</div>
+				<div class="d-simul-n">${s.simul}</div>` : '<div class="d-label">vs</div>'}
 			</div>
 			${side(1)}
 		</div>
@@ -215,6 +251,15 @@ function colorOptions(selected) {
 		`<option value="${k}"${k === selected ? ' selected' : ''}>${c.label}</option>`).join('');
 }
 
+function presetsHTML(st) {
+	const preset = activePreset(st);
+	const buttons = MATCH_PRESETS.map(p => `<button type="button" class="preset${preset?.id === p.id ? ' on' : ''}" data-action="preset" data-preset="${p.id}" aria-pressed="${preset?.id === p.id}">
+		<strong>${esc(p.label)}</strong><span>${esc(p.note)}</span>
+	</button>`).join('');
+	return `<div class="presets">${buttons}</div>
+		${preset ? '' : '<p class="muted small-note">These rules have been changed by hand. Pick a match type to load its rules.</p>'}`;
+}
+
 function renderSettings(s) {
 	const st = s.settings;
 	const fighterFields = side => {
@@ -227,8 +272,28 @@ function renderSettings(s) {
 			<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>
 		</fieldset>`;
 	};
+	const chip = (name, custom) => `<span class="chip${st.division === name ? ' on' : ''}">
+		<button type="button" data-action="division" data-division="${esc(name)}" aria-pressed="${st.division === name}">${esc(name)}</button>${custom ? `<button type="button" class="chip-x" data-action="remove-division" data-division="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>` : ''}
+	</span>`;
 	return `<form method="dialog" class="sheet-body">
 		<header class="sheet-head"><h2>Settings</h2><button class="btn small" value="close">Done</button></header>
+
+		<section>
+			<h3>Match type</h3>
+			<div id="presets">${presetsHTML(st)}</div>
+		</section>
+
+		<section>
+			<h3>Division</h3>
+			<div class="chips">
+				<span class="chip${st.division ? '' : ' on'}"><button type="button" data-action="division" data-division="" aria-pressed="${!st.division}">None</button></span>
+				${DIVISIONS.map(d => chip(d, false)).join('')}
+				${st.customDivisions.map(d => chip(d, true)).join('')}
+			</div>
+			<label>Custom division or match type
+				<span class="inline"><input id="custom-division" maxlength="40" placeholder="e.g. Youth Open" autocomplete="off" /><button type="button" class="btn small" data-action="add-division">Add</button></span>
+			</label>
+		</section>
 
 		<section>
 			<h3>Fighters</h3>
@@ -251,9 +316,11 @@ function renderSettings(s) {
 			<div class="two-col">
 				<label>Round length <input data-setting="duration" data-kind="clock" value="${formatClock(st.duration, { hundredths: false })}" inputmode="decimal" /></label>
 				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
+				<label>Points to win the round <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
 				<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
 			</div>
+			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
 			<label class="check"><input type="checkbox" data-setting="holdWinnerAtTimeUp" ${st.holdWinnerAtTimeUp ? 'checked' : ''} /> At time up, wait for last points before showing the winner</label>
 			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time up</label>
@@ -395,6 +462,13 @@ function confirmAction(text, okLabel) {
 
 // --- actions ---
 
+/** Redraws the open settings sheet after a change made from inside it, keeping its scroll position. */
+function refreshSettings() {
+	const top = settingsDialog.scrollTop;
+	settingsDialog.innerHTML = renderSettings(store.state);
+	settingsDialog.scrollTop = top;
+}
+
 function openSettings() {
 	store.pause();
 	settingsDialog.innerHTML = renderSettings(store.state);
@@ -450,7 +524,22 @@ const actions = {
 	export: exportCSV,
 	swap: () => {
 		store.swapSides();
-		settingsDialog.innerHTML = renderSettings(store.state);
+		refreshSettings();
+	},
+	preset: el => {
+		store.applyPreset(el.dataset.preset);
+		refreshSettings();
+	},
+	division: el => {
+		store.setDivision(el.dataset.division);
+		refreshSettings();
+	},
+	'add-division': () => {
+		if (store.addCustomDivision($('#custom-division').value)) refreshSettings();
+	},
+	'remove-division': el => {
+		store.removeCustomDivision(el.dataset.division);
+		refreshSettings();
 	},
 	'set-time': () => {
 		const input = $('#time-left');
@@ -536,12 +625,17 @@ settingsDialog.addEventListener('change', e => {
 			el.setCustomValidity('');
 		}
 		store.updateSettings({ [key]: value });
+		// The match type buttons show which preset these rules now match.
+		$('#presets').innerHTML = presetsHTML(store.state.settings);
 	}
 });
 settingsDialog.addEventListener('keydown', e => {
 	if (e.key === 'Enter' && e.target.id === 'time-left') {
 		e.preventDefault();
 		actions['set-time']();
+	} else if (e.key === 'Enter' && e.target.id === 'custom-division') {
+		e.preventDefault();
+		actions['add-division']();
 	}
 });
 
