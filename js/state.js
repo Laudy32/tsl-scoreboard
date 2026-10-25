@@ -39,6 +39,12 @@ export const MATCH_PRESETS = [
 	{ id: 'unity', label: 'Unity', note: '1:00', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
 ];
 
+/** Only Championship Series is fought over rounds (best of 3); every other division is one bout. */
+export const ROUNDS_DIVISION = 'Championship Series';
+export const CS_ROUNDS_TO_WIN = 2;
+
+export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
+
 export const DIVISIONS = ['Standard', 'Exotics', 'Unity', 'Tag Team', 'Redemption', 'Masters', "Women's", 'Championship Series'];
 
 /** The preset the current rules match, or null if they've been changed by hand. */
@@ -425,8 +431,24 @@ export class Store {
 		return this.updateSettings(preset.settings);
 	}
 
+	/**
+	 * Picks the division. Championship Series is best of 3, so entering it
+	 * sets that up; leaving it clears it, unless it was changed by hand.
+	 */
+	#selectDivision(st, division) {
+		const was = st.division;
+		if (division === ROUNDS_DIVISION && was !== ROUNDS_DIVISION && !st.playTo) {
+			st.playTo = CS_ROUNDS_TO_WIN;
+		} else if (was === ROUNDS_DIVISION && division !== ROUNDS_DIVISION && st.playTo === CS_ROUNDS_TO_WIN) {
+			st.playTo = 0;
+		}
+		st.division = division;
+	}
+
 	setDivision(name) {
-		return this.updateSettings({ division: String(name ?? '').trim() });
+		return this.apply(s => {
+			this.#selectDivision(s.settings, String(name ?? '').trim());
+		}, { undoable: false });
 	}
 
 	/** Adds a typed-in division to the saved list (once) and selects it. */
@@ -438,7 +460,7 @@ export class Store {
 			const same = d => d.toLowerCase() === clean.toLowerCase();
 			const existing = DIVISIONS.find(same) ?? st.customDivisions.find(same);
 			if (!existing) st.customDivisions = [...st.customDivisions, clean];
-			st.division = existing ?? clean;
+			this.#selectDivision(st, existing ?? clean);
 		}, { undoable: false });
 	}
 
@@ -447,7 +469,7 @@ export class Store {
 			const st = s.settings;
 			if (!st.customDivisions.includes(name)) return false;
 			st.customDivisions = st.customDivisions.filter(d => d !== name);
-			if (st.division === name) st.division = '';
+			if (st.division === name) this.#selectDivision(st, '');
 		}, { undoable: false });
 	}
 

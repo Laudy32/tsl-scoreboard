@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent,
+	activePreset, describeEvent, usesRounds,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -274,4 +274,31 @@ test('older saves pick up the new settings', () => {
 	assert.equal(st.settings.liveScore, true);
 	assert.deepEqual(st.settings.customDivisions, []);
 	assert.equal(st.stoppedAtTarget, null);
+});
+
+test('rounds only apply to Championship Series, which defaults to best of 3', () => {
+	const { store, s } = setup();
+	assert.equal(usesRounds(s()), false);
+	store.setDivision('Masters');
+	assert.equal(usesRounds(s()), false);
+	assert.equal(s().settings.playTo, 0);
+	store.setDivision('Championship Series');
+	assert.equal(usesRounds(s()), true);
+	assert.equal(s().settings.playTo, 2);
+	store.setDivision('Exotics');
+	assert.equal(s().settings.playTo, 0, 'leaving CS clears the best-of-3 default');
+	store.setDivision('Championship Series');
+	store.updateSettings({ playTo: 3 });
+	store.setDivision('Masters');
+	assert.equal(s().settings.playTo, 3, 'a hand-set value is kept');
+});
+
+test('best of 3 ends after two round wins', () => {
+	const { store, s } = setup();
+	store.setDivision('Championship Series');
+	store.addPoint(0); store.endRoundNow(); store.nextRound();
+	assert.equal(matchWinner(s()), null);
+	store.addPoint(1); store.endRoundNow(); store.nextRound();
+	store.addPoint(0); store.endRoundNow(); store.nextRound();
+	assert.equal(matchWinner(s()), 0);
 });

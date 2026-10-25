@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset,
+	MATCH_PRESETS, DIVISIONS, activePreset, usesRounds,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -99,6 +99,9 @@ function divisionHTML(s, cls) {
 	return s.settings.division ? `<div class="${cls}">${esc(s.settings.division)}</div>` : '';
 }
 
+/** What moving on is called: rounds only exist in Championship Series. */
+const nextLabel = s => (usesRounds(s) ? 'Next round' : 'Next match');
+
 /** The display font's digits differ in width, so each gets a fixed-width cell to keep the clock still. */
 function clockHTML(text) {
 	return [...text].map(c => (/\d/.test(c) ? `<span class="dg">${c}</span>` : c)).join('');
@@ -108,7 +111,7 @@ function clockHTML(text) {
 
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
-		return '<button class="btn primary" data-action="next">Next round</button>';
+		return '<button class="btn primary" data-action="next">${nextLabel(s)}</button>';
 	}
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
@@ -151,7 +154,7 @@ function renderControl(s) {
 			<img class="emblem" src="assets/emblem-256.png" alt="The Saber Legion" width="48" height="48" />
 			<div class="brand-text">
 				<span class="org">The Saber Legion</span>
-				<button class="round-pill" data-action="settings">Round ${s.round}${s.suddenDeath ? ' <span class="sd-tag">Sudden death</span>' : ''}</button>
+				<button class="round-pill" data-action="settings">${usesRounds(s) ? `Round ${s.round}` : 'Match'}${s.suddenDeath ? ' <span class="sd-tag">Sudden death</span>' : ''}</button>
 			</div>
 		</div>
 		<div class="bar-actions">
@@ -187,8 +190,8 @@ function renderControl(s) {
 			${primaryButton(s)}
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
-				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : 'Next round'} <kbd>N</kbd></button>` : ''}
-				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>End round</button>
+				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>` : ''}
+				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>${usesRounds(s) ? 'End round' : 'End match'}</button>
 			</div>
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
@@ -200,7 +203,7 @@ function renderControl(s) {
 				<tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>+1 / −1 simul</td></tr>
 				<tr><td><kbd>E</kbd> / <kbd>D</kbd></td><td>+1 / −1 right fighter</td></tr>
 				<tr><td><kbd>Space</kbd></td><td>Start / pause (show winner after time up)</td></tr>
-				<tr><td><kbd>N</kbd></td><td>Next round or tiebreaker</td></tr>
+				<tr><td><kbd>N</kbd></td><td>Next round (next match outside Championship Series) or tiebreaker</td></tr>
 				<tr><td><kbd>Z</kbd></td><td>Undo</td></tr>
 				<tr><td><kbd>F</kbd></td><td>Open the spectator display</td></tr>
 			</table>
@@ -225,7 +228,7 @@ function renderDisplay(s) {
 	return `<main class="display${live ? '' : ' no-score'}" data-action="fullscreen">
 		<div class="d-top">
 			${divisionHTML(s, 'd-division')}
-			<div class="d-round">Round ${s.round}</div>
+			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
 		</div>
@@ -261,6 +264,7 @@ function presetsHTML(st) {
 
 function renderSettings(s) {
 	const st = s.settings;
+	const rounds = usesRounds(s);
 	const fighterFields = side => {
 		const f = s.fighters[side];
 		return `<fieldset class="fighter-fields" style="--c:${hex(f.color)}">
@@ -268,7 +272,7 @@ function renderSettings(s) {
 			<label>Name <input data-fighter="${side}" data-field="name" value="${esc(f.name)}" autocomplete="off" /></label>
 			<label>Subtitle <textarea data-fighter="${side}" data-field="subtitle" rows="2">${esc(f.subtitle)}</textarea></label>
 			<label>Color <select data-fighter="${side}" data-field="color">${colorOptions(f.color)}</select></label>
-			<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>
+			${rounds ? `<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>` : ''}
 		</fieldset>`;
 	};
 	const chip = (name, custom) => `<span class="chip${st.division === name ? ' on' : ''}">
@@ -301,9 +305,9 @@ function renderSettings(s) {
 		</section>
 
 		<section>
-			<h3>This round</h3>
+			<h3>${rounds ? 'This round' : 'This match'}</h3>
 			<div class="two-col">
-				<label>Round number <input type="number" min="1" inputmode="numeric" id="round-number" value="${s.round}" /></label>
+				${rounds ? `<label>Round number <input type="number" min="1" inputmode="numeric" id="round-number" value="${s.round}" /></label>` : ''}
 				<label>Time left
 					<span class="inline"><input id="time-left" value="${formatClock(timeLeft(s), { hundredths: false })}" inputmode="decimal" /><button type="button" class="btn small" data-action="set-time">Set</button></span>
 				</label>
@@ -313,10 +317,10 @@ function renderSettings(s) {
 		<section>
 			<h3>Rules</h3>
 			<div class="two-col">
-				<label>Round length <input data-setting="duration" data-kind="clock" value="${formatClock(st.duration, { hundredths: false })}" inputmode="decimal" /></label>
+				<label>${rounds ? 'Round length' : 'Match length'} <input data-setting="duration" data-kind="clock" value="${formatClock(st.duration, { hundredths: false })}" inputmode="decimal" /></label>
 				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
-				<label>Points to win the round <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
-				<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>
+				<label>${rounds ? 'Points to win the round' : 'Points to win'} <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
+				${rounds ? `<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>` : ''}
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
 			</div>
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
@@ -328,7 +332,7 @@ function renderSettings(s) {
 		<section>
 			<h3>Reset</h3>
 			<div class="row wrap">
-				<button type="button" class="btn" data-action="reset-round">Reset round</button>
+				<button type="button" class="btn" data-action="reset-round">${rounds ? 'Reset round' : 'Reset scores and clock'}</button>
 				<button type="button" class="btn" data-action="new-match">New match, same fighters</button>
 				<button type="button" class="btn danger" data-action="reset-all">Reset everything</button>
 			</div>
