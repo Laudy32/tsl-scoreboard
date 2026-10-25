@@ -4,7 +4,11 @@ import {
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
-const view = new URLSearchParams(location.search).get('view') === 'display' ? 'display' : 'control';
+// A display opened in its own window (?view=display) only shows the score.
+// A display switched on in this window (F) still takes keyboard input and
+// runs the clock, since no other window is controlling it.
+const displayWindow = new URLSearchParams(location.search).get('view') === 'display';
+let view = displayWindow ? 'display' : 'control';
 document.body.dataset.view = view;
 
 // --- persistence and sync between windows on this device ---
@@ -185,6 +189,7 @@ function renderDisplay(s) {
 			${side(1)}
 		</div>
 		<img class="d-banner" src="assets/banner.jpg" alt="The Saber Legion" />
+		${displayWindow ? '' : '<button class="btn small d-back" data-action="controls">Back to controls <kbd>F</kbd></button>'}
 	</main>`;
 }
 
@@ -298,7 +303,7 @@ function tick() {
 	for (const el of document.querySelectorAll('[data-clock]')) {
 		if (el.textContent !== text) el.textContent = text;
 	}
-	if (isRunning(s) && left === 0 && view === 'control') {
+	if (isRunning(s) && left === 0 && !displayWindow) {
 		store.expire();
 		if (s.settings.sound) alarm();
 	}
@@ -383,8 +388,22 @@ function openHistory() {
 	historyDialog.showModal();
 }
 
+function setView(next) {
+	view = next;
+	document.body.dataset.view = view;
+	render();
+	wakeLock(isRunning(store.state) || view === 'display');
+}
+
 function openDisplay() {
-	window.open(`${location.pathname}?view=display`, 'tsl-display', 'popup,width=1280,height=720');
+	let win = null;
+	try {
+		win = window.open(`${location.pathname}?view=display`, 'tsl-display', 'popup,width=1280,height=720');
+	} catch {
+		// Popups blocked.
+	}
+	// No second window (blocked, or an embedded preview): show it here instead.
+	if (!win) setView('display');
 }
 
 function exportCSV() {
@@ -444,6 +463,7 @@ const actions = {
 			settingsDialog.close();
 		}
 	},
+	controls: () => setView('control'),
 	fullscreen: () => {
 		if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
 	},
@@ -510,7 +530,7 @@ settingsDialog.addEventListener('keydown', e => {
 // --- keyboard ---
 
 window.addEventListener('keydown', e => {
-	if (view === 'display' || e.metaKey || e.altKey) return;
+	if (displayWindow || e.metaKey || e.altKey) return;
 	if (document.querySelector('dialog[open]')) return;
 	if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
 	const key = e.key.toLowerCase();
@@ -525,7 +545,8 @@ window.addEventListener('keydown', e => {
 		' ': () => (timeLeft(store.state) ? store.toggleClock() : store.toggleShowWinner()),
 		n: () => store.nextRound(),
 		z: () => store.undo(),
-		f: openDisplay,
+		f: () => (view === 'display' ? setView('control') : openDisplay()),
+		escape: () => view === 'display' && setView('control'),
 	};
 	if (!map[key]) return;
 	e.preventDefault();
