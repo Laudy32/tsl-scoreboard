@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS = {
 	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
 	 */
 	finalExchange: true,
+	/** Line judges reporting a tally in formats with no live score (Unity, Rules 9.11-9.12). */
+	tallyJudges: 3,
 	sound: true,
 };
 
@@ -77,6 +79,17 @@ export function presetNote(p, settings) {
 
 const UNDO_LIMIT = 100;
 
+function emptyTally() {
+	return { judges: [[null, null], [null, null], [null, null]], published: false, tieWinner: null };
+}
+
+/** The judges' totals per fighter, counting only judges who have reported both scores. */
+export function tallyTotals(s) {
+	const n = s.settings.tallyJudges;
+	const done = s.tally.judges.slice(0, n).filter(j => j.every(v => v !== null));
+	return { reported: done.length, totals: [0, 1].map(i => done.reduce((sum, j) => sum + j[i], 0)) };
+}
+
 function fighter(color) {
 	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0 };
 }
@@ -92,6 +105,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		suddenDeath: false,
 		/** Time is up but the last exchange is still being fought. */
 		finalExchange: false,
+		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
+		tally: emptyTally(),
 		/** Tag Team, after a simul: which teams paid a point to keep their fighter in. Null when no switch is due. */
 		tagSwitch: null,
 		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
@@ -134,7 +149,7 @@ export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.durati
 /** Index of the fighter ahead on points, or null on a tie. */
 export function leader(s) {
 	const [a, b] = s.fighters;
-	if (a.score === b.score) return null;
+	if (a.score === b.score) return s.tally?.tieWinner ?? null;
 	return a.score > b.score ? 0 : 1;
 }
 
@@ -395,6 +410,57 @@ export class Store {
 		}, { undoable: false });
 	}
 
+	// --- judges' tally (no live score) ---
+
+	setTally(judge, side, value) {
+		return this.apply(s => {
+			if (s.tally.published) return false;
+			const n = Math.floor(value);
+			s.tally.judges[judge][side] = value === null || Number.isNaN(n) ? null : Math.max(0, n);
+		}, { undoable: false });
+	}
+
+	/** Every judge the table expects has reported both scores. */
+	tallyComplete() {
+		const { reported } = tallyTotals(this.state);
+		return reported === this.state.settings.tallyJudges;
+	}
+
+	/** Reveals the totals and the winner on every screen. */
+	publishTally() {
+		if (!this.tallyComplete() || this.state.tally.published) return false;
+		return this.apply(s => {
+			const { totals } = tallyTotals(s);
+			s.fighters.forEach((f, i) => { f.score = totals[i]; });
+			s.tally.published = true;
+			s.showWinner = true;
+			// Judges report once the round is over, so publishing closes the clock.
+			s.remaining = 0;
+			s.startedAt = null;
+			this.#logEvent(s, 'tally-published');
+		}, { clock: true });
+	}
+
+	/** Takes a published result back so the tallies can be corrected. */
+	unpublishTally() {
+		return this.apply(s => {
+			if (!s.tally.published) return false;
+			s.fighters.forEach(f => { f.score = 0; });
+			s.tally.published = false;
+			s.tally.tieWinner = null;
+			this.#logEvent(s, 'tally-unpublished');
+		}, { clock: true });
+	}
+
+	/** After a tied tally, the Marshal's sudden death names the winner (Rules 9.12a-2). */
+	setTieWinner(side) {
+		return this.apply(s => {
+			if (!s.tally.published || leader({ ...s, tally: { tieWinner: null } }) !== null) return false;
+			s.tally.tieWinner = side;
+			this.#logEvent(s, 'tie-broken', { side });
+		});
+	}
+
 	toggleShowWinner() {
 		return this.apply(s => {
 			if (s.finalExchange) return false;
@@ -449,6 +515,7 @@ export class Store {
 		s.suddenDeath = false;
 		s.finalExchange = false;
 		s.tagSwitch = null;
+		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
 		s.startedAt = null;
@@ -477,6 +544,8 @@ export class Store {
 		return this.apply(s => {
 			s.fighters.reverse();
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
+			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
+			if (s.tally.tieWinner !== null) s.tally.tieWinner = 1 - s.tally.tieWinner;
 			for (const e of s.log) {
 				e.scores = [...e.scores].reverse();
 				if (typeof e.side === 'number') e.side = 1 - e.side;
@@ -615,6 +684,9 @@ export function describeEvent(s, e) {
 		return 'Simul';
 	}
 	case 'time-up': return 'Time up';
+	case 'tally-published': return `Judges' tally published ${e.scores[0]}–${e.scores[1]}`;
+	case 'tally-unpublished': return 'Tally taken back';
+	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
 	case 'final-exchange': return 'Final exchange';
 	case 'no-call': return 'No call, bout over';
 	case 'stay': return `${who(e.side)} took −1 to stay in`;

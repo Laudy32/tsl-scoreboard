@@ -23,6 +23,9 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   time runs out. At 0:00 the table calls a Final Exchange: it ends on a point,
   a simul or No call (only a point if the scores are one apart), then the
   winner shows; a tie goes to a 30-second sudden-death tiebreaker
+- Unity judges' tally: 2 or 3 line judges report to the table, the totals pick
+  the winner, and nothing shows on the display until you press Publish. A
+  tie can be recorded (pools) or settled by the Marshal's sudden death
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV

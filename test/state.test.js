@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote,
+	activePreset, describeEvent, usesRounds, presetNote, tallyTotals, leader,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -425,4 +425,71 @@ test('tag team sudden death: a simul forces both switches', () => {
 	assert.ok(s().tagSwitch);
 	assert.equal(store.canStay(0), false);
 	assert.equal(store.canStay(1), false);
+});
+
+function unitySetup(judges = 3) {
+	const x = setup();
+	x.store.applyPreset('unity');
+	x.store.updateSettings({ tallyJudges: judges });
+	return x;
+}
+
+test('unity: judges enter tallies privately, then publish to reveal the winner', () => {
+	const { store, s } = unitySetup();
+	store.setTally(0, 0, 7); store.setTally(0, 1, 5);
+	store.setTally(1, 0, 6); store.setTally(1, 1, 5);
+	assert.equal(store.tallyComplete(), false);
+	assert.equal(store.publishTally(), false, 'needs every judge');
+	store.setTally(2, 0, 8); store.setTally(2, 1, 6);
+	assert.deepEqual(tallyTotals(s()), { reported: 3, totals: [21, 16] });
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0], 'nothing shows before publishing');
+	assert.equal(store.publishTally(), true);
+	assert.deepEqual(s().fighters.map(f => f.score), [21, 16]);
+	assert.equal(leader(s()), 0);
+	assert.equal(store.setTally(0, 0, 1), false, 'locked once published');
+	store.undo();
+	assert.equal(s().tally.published, false, 'undo takes the publish back');
+	assert.equal(s().tally.judges[0][0], 7, 'tallies kept');
+});
+
+test('unity: two judges is enough when set, and a published result can be taken back', () => {
+	const { store, s } = unitySetup(2);
+	store.setTally(0, 0, 3); store.setTally(0, 1, 4);
+	store.setTally(1, 0, 3); store.setTally(1, 1, 2);
+	store.setTally(2, 0, 99); store.setTally(2, 1, 0);
+	assert.deepEqual(tallyTotals(s()).totals, [6, 6], 'the third judge is ignored');
+	assert.equal(store.publishTally(), true);
+	assert.equal(store.unpublishTally(), true);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+	store.setTally(1, 0, 5);
+	assert.equal(store.publishTally(), true);
+	assert.equal(leader(s()), 0);
+});
+
+test('unity: a tied tally is a tie in pools, or the Marshal names a sudden-death winner', () => {
+	const { store, s } = unitySetup(2);
+	for (const j of [0, 1]) { store.setTally(j, 0, 4); store.setTally(j, 1, 4); }
+	store.publishTally();
+	assert.equal(leader(s()), null);
+	assert.equal(store.nextRoundAction(), 'next', 'pools can end in a tie');
+	assert.equal(store.setTieWinner(1), true);
+	assert.equal(leader(s()), 1);
+	store.nextRound();
+	assert.equal(s().rounds[0].winner, 1);
+	assert.equal(s().fighters[1].wins, 1);
+	assert.deepEqual(s().tally.judges[0], [null, null], 'tallies clear for the next match');
+	assert.equal(s().tally.tieWinner, null);
+});
+
+test('unity: swap sides moves the tallies with the fighters', () => {
+	const { store, s } = unitySetup(2);
+	store.setTally(0, 0, 5); store.setTally(0, 1, 2);
+	store.swapSides();
+	assert.deepEqual(s().tally.judges[0], [2, 5]);
+});
+
+test('tally survives saves from before it existed', () => {
+	const old = initialState();
+	delete old.tally;
+	assert.deepEqual(normalize(old).tally.judges[0], [null, null]);
 });

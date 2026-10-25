@@ -307,6 +307,17 @@ kbd {
 .btn.primary.pause { background: var(--stop); color: #fff; }
 .btn.primary.pause:hover { background: #f5850f; }
 
+/* Unity judges' tally */
+.tally { margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
+.tally h3 { margin: 0; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--gold); }
+.tally-row { display: grid; grid-template-columns: 5.5em 1fr 1fr; gap: 8px; align-items: center; }
+.tally-row input { width: 100%; min-height: 52px; text-align: center; font: 800 28px/1 var(--display); border: 1px solid var(--line); border-radius: 12px; background: #0b0c0e; color: #fff; }
+.tally-row input:disabled { opacity: 0.6; }
+.tally-name { text-align: center; font: 800 18px/1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; color: var(--c); filter: brightness(1.4); }
+.tally-total { border-top: 1px solid var(--line); padding-top: 8px; }
+.tally-total strong { text-align: center; font: 900 36px/1 var(--display); }
+.tally .btn[data-action="tie-winner"] { border-color: var(--c); }
+
 /* Final exchange and Tag Team switch calls */
 .fe-note { margin: 0; text-align: center; color: var(--muted); font-size: 15px; }
 .fe-note strong { color: var(--danger); }

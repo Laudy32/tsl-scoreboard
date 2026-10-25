@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, tallyTotals,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -74,7 +74,7 @@ function statusLine(s) {
 	}
 	if (s.finalExchange) return '<span class="status alert">Final exchange</span>';
 	if (timeLeft(s) === 0) {
-		if (!s.settings.liveScore) return '<span class="status alert">Time up</span>';
+		if (!s.settings.liveScore && !s.tally.published) return '<span class="status alert">Time up</span>';
 		if (!s.showWinner && !s.suddenDeath) return '<span class="status alert">Time up</span>';
 		const w = leader(s);
 		if (w === null) return '<span class="status alert">Tie</span>';
@@ -148,6 +148,37 @@ function switchPanel(s) {
 	</div>`;
 }
 
+/** Unity: line judges report their silent tallies here; nothing shows on the display until it's published. */
+function tallyPanel(s) {
+	if (s.settings.liveScore) return '';
+	const n = s.settings.tallyJudges;
+	const { totals } = tallyTotals(s);
+	const locked = s.tally.published;
+	const head = [0, 1].map(i => `<span class="tally-name" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))}</span>`).join('');
+	const rows = Array.from({ length: n }, (_, j) => `<div class="tally-row"><span>Judge ${j + 1}</span>${[0, 1].map(i => {
+		const v = s.tally.judges[j][i];
+		return `<input type="number" min="0" inputmode="numeric" data-tally="${j}-${i}" value="${v ?? ''}" ${locked ? 'disabled' : ''} aria-label="Judge ${j + 1}, ${esc(fighterLabel(s, i))}" />`;
+	}).join('')}</div>`).join('');
+	let foot;
+	if (!locked) {
+		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>
+			<p class="fe-note">Hidden on the display until you publish.</p>`;
+	} else if (leader(s) === null) {
+		foot = `<p class="fe-note"><strong>Tied.</strong> A pool match can end in a tie. In single elimination the Marshal runs sudden death: who won it?</p>
+			<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>
+			<button class="btn" data-action="unpublish">Take back and edit</button>`;
+	} else {
+		foot = '<button class="btn" data-action="unpublish">Take back and edit</button>';
+	}
+	return `<section class="tally">
+		<h3>Judges' tally</h3>
+		<div class="tally-row tally-head"><span></span>${head}</div>
+		${rows}
+		<div class="tally-row tally-total"><span>Total</span><strong data-tally-total="0">${tallyTotals(s).reported ? totals[0] : '–'}</strong><strong data-tally-total="1">${tallyTotals(s).reported ? totals[1] : '–'}</strong></div>
+		${foot}
+	</section>`;
+}
+
 function fighterPanel(s, side) {
 	const f = s.fighters[side];
 	if (!s.settings.liveScore) {
@@ -215,6 +246,7 @@ function renderControl(s) {
 		</div>
 
 		${switchPanel(s)}
+		${tallyPanel(s)}
 		<div class="actions">
 			${primaryButton(s)}
 			${s.finalExchange ? finalExchangeNote() : ''}
@@ -245,7 +277,8 @@ function renderControl(s) {
 // --- display view ---
 
 function renderDisplay(s) {
-	const live = s.settings.liveScore;
+	// Unity shows scores only once the table publishes the judges' tally.
+	const live = s.settings.liveScore || s.tally.published;
 	const side = i => {
 		const f = s.fighters[i];
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
@@ -267,7 +300,7 @@ function renderDisplay(s) {
 			${side(0)}
 			<div class="d-simul">
 				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
-				${live ? `<div class="d-label">Simul</div>
+				${s.settings.liveScore ? `<div class="d-label">Simul</div>
 				<div class="d-simul-n">${s.simul}</div>` : '<div class="d-label">vs</div>'}
 			</div>
 			${side(1)}
@@ -357,6 +390,7 @@ function renderSettings(s) {
 				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
 				<label>${rounds ? 'Points to win the round' : 'Points to win'} <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
 				${rounds ? `<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>` : ''}
+				${st.liveScore ? '' : `<label>Line judges <select data-setting="tallyJudges" data-kind="int"><option value="2"${st.tallyJudges === 2 ? ' selected' : ''}>2</option><option value="3"${st.tallyJudges === 3 ? ' selected' : ''}>3</option></select></label>`}
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
 			</div>
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
@@ -403,8 +437,22 @@ const app = $('#app');
 const settingsDialog = $('#settings');
 const historyDialog = $('#history');
 
+// A judge's number is committed on change; rebuilding the page then would
+// drop focus from the next field, so just refresh the totals and Publish.
+let tallyEditing = false;
+function refreshTally(s) {
+	const { reported, totals } = tallyTotals(s);
+	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? totals[+el.dataset.tallyTotal] : '–';
+	const publish = $('[data-action="publish"]');
+	if (publish) publish.disabled = !store.tallyComplete();
+}
+
 function render() {
 	const s = store.state;
+	if (tallyEditing) {
+		refreshTally(s);
+		return;
+	}
 	app.innerHTML = view === 'display' ? renderDisplay(s) : renderControl(s);
 	document.documentElement.style.setProperty('--left', hex(s.fighters[0].color));
 	document.documentElement.style.setProperty('--right', hex(s.fighters[1].color));
@@ -556,6 +604,9 @@ const actions = {
 		if (store.pointRequired() && !await confirmAction('The scores are one point apart, so the rules say a point must be awarded. End the bout with no point anyway?', 'End with no point')) return;
 		store.noCall();
 	},
+	publish: () => store.publishTally(),
+	unpublish: () => store.unpublishTally(),
+	'tie-winner': el => store.setTieWinner(+el.dataset.side),
 	stay: el => store.stay(+el.dataset.side),
 	'switch-done': () => store.switchDone(),
 	duration: el => {
@@ -638,6 +689,19 @@ document.addEventListener('contextmenu', e => {
 	e.preventDefault();
 	if (el.dataset.action === 'point') store.addPoint(+el.dataset.side, -1);
 	else if (el.dataset.action === 'simul') store.addSimul(-1);
+});
+
+// Judges' tallies: committed per field without redrawing the page.
+app.addEventListener('change', e => {
+	const el = e.target.closest('[data-tally]');
+	if (!el) return;
+	const [judge, side] = el.dataset.tally.split('-').map(Number);
+	tallyEditing = true;
+	try {
+		store.setTally(judge, side, el.value === '' ? null : parseInt(el.value, 10));
+	} finally {
+		tallyEditing = false;
+	}
 });
 
 // Settings fields apply as soon as they change.
