@@ -8,7 +8,10 @@ const FILES = [
 	'js/app.js',
 	'js/state.js',
 	'manifest.webmanifest',
-	'assets/banner.jpg',
+	'assets/emblem-256.png',
+	'assets/fonts/big-shoulders.woff2',
+	'assets/fonts/barlow-sc-500.woff2',
+	'assets/fonts/barlow-sc-700.woff2',
 	'assets/saber-icon.png',
 	'assets/saber-icon-192.png',
 ];

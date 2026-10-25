@@ -2,13 +2,13 @@
 // can be tested in Node.
 
 export const COLORS = {
-	blue: { label: 'Blue', hex: '#3b5bdb' },
-	red: { label: 'Red', hex: '#c92a2a' },
-	green: { label: 'Green', hex: '#2f9e44' },
-	gold: { label: 'Gold', hex: '#b08900' },
-	orange: { label: 'Orange', hex: '#e8590c' },
-	purple: { label: 'Purple', hex: '#8e3fb0' },
-	black: { label: 'Black', hex: '#343a40' },
+	blue: { label: 'Blue', hex: '#2459e0' },
+	red: { label: 'Red', hex: '#d42a3a' },
+	green: { label: 'Green', hex: '#1e9e57' },
+	gold: { label: 'Gold', hex: '#c9971c' },
+	orange: { label: 'Orange', hex: '#e8650f' },
+	purple: { label: 'Purple', hex: '#8b44e0' },
+	black: { label: 'Black', hex: '#30343c' },
 };
 
 export const DEFAULT_SETTINGS = {

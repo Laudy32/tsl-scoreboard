@@ -82,6 +82,11 @@ function statusLine(s) {
 	return '<span class="status muted">&nbsp;</span>';
 }
 
+/** The display font's digits differ in width, so each gets a fixed-width cell to keep the clock still. */
+function clockHTML(text) {
+	return [...text].map(c => (/\d/.test(c) ? `<span class="dg">${c}</span>` : c)).join('');
+}
+
 // --- control view ---
 
 function primaryButton(s) {
@@ -113,7 +118,13 @@ function renderControl(s) {
 	const cutoff = s.settings.simulCutoff;
 	return `
 	<header class="bar">
-		<button class="round-pill" data-action="settings">Round ${s.round}${s.suddenDeath ? ' · SD' : ''}</button>
+		<div class="brand">
+			<img class="emblem" src="assets/emblem-256.png" alt="The Saber Legion" width="48" height="48" />
+			<div class="brand-text">
+				<span class="org">The Saber Legion</span>
+				<button class="round-pill" data-action="settings">Round ${s.round}${s.suddenDeath ? ' <span class="sd-tag">Sudden death</span>' : ''}</button>
+			</div>
+		</div>
 		<div class="bar-actions">
 			<button class="btn small" data-action="history">History</button>
 			<button class="btn small" data-action="display">Display</button>
@@ -122,7 +133,7 @@ function renderControl(s) {
 	</header>
 	<main class="control">
 		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}" data-action="clock" aria-label="Start or pause the clock">
-			<span data-clock>${formatClock(timeLeft(s))}</span>
+			<span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span>
 		</button>
 		<div class="status-row">${statusLine(s)}</div>
 
@@ -180,15 +191,19 @@ function renderDisplay(s) {
 	return `<main class="display" data-action="fullscreen">
 		<div class="d-top">
 			<div class="d-round">Round ${s.round}</div>
-			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${formatClock(timeLeft(s))}</span></div>
+			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
 		</div>
 		<div class="d-fighters">
 			${side(0)}
-			<div class="d-simul"><div class="d-label">Simul</div><div class="d-simul-n">${s.simul}</div></div>
+			<div class="d-simul">
+				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
+				<div class="d-label">Simul</div>
+				<div class="d-simul-n">${s.simul}</div>
+			</div>
 			${side(1)}
 		</div>
-		<img class="d-banner" src="assets/banner.jpg" alt="The Saber Legion" />
+		<div class="d-foot">The Saber Legion <span>International Saber Combat Organization</span></div>
 		${displayWindow ? '' : '<button class="btn small d-back" data-action="controls">Back to controls <kbd>F</kbd></button>'}
 	</main>`;
 }
@@ -301,7 +316,10 @@ function tick() {
 	const left = timeLeft(s);
 	const text = formatClock(left);
 	for (const el of document.querySelectorAll('[data-clock]')) {
-		if (el.textContent !== text) el.textContent = text;
+		if (el.dataset.text !== text) {
+			el.dataset.text = text;
+			el.innerHTML = clockHTML(text);
+		}
 	}
 	if (isRunning(s) && left === 0 && !displayWindow) {
 		store.expire();
