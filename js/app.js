@@ -103,7 +103,7 @@ function fighterPanel(s, side) {
 			<span class="hint">tap +1 <kbd>${key[0]}</kbd></span>
 		</button>
 		${dots(s, side)}
-		<button class="btn minus" data-action="point" data-side="${side}" data-delta="-1">−1 <kbd>${key[1]}</kbd></button>
+		<button class="btn minus" data-action="point" data-side="${side}" data-delta="-1" ${f.score > 0 ? '' : 'disabled'}>−1 <kbd>${key[1]}</kbd></button>
 	</div>`;
 }
 

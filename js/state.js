@@ -36,6 +36,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		round: 1,
 		fighters: [fighter('blue'), fighter('red')],
 		simul: 0,
+		/** Points each simul actually took from [left, right], so removing it gives back the same. */
+		simulPenalties: [],
 		suddenDeath: false,
 		showWinner: !settings.holdWinnerAtTimeUp,
 		/** Time left as of the last start/pause. */
@@ -230,6 +232,8 @@ export class Store {
 
 	addPoint(side, delta = 1) {
 		return this.apply(s => {
+			// Scores never go below zero.
+			if (s.fighters[side].score + delta < 0) return false;
 			s.fighters[side].score += delta;
 			this.#logEvent(s, 'point', { side, delta });
 			this.#afterScoring(s);
@@ -240,11 +244,20 @@ export class Store {
 		return this.apply(s => {
 			if (delta < 0 && s.simul === 0) return false;
 			const cutoff = s.settings.simulCutoff;
-			// The penalty applies to the simul at index >= cutoff (1-based count).
-			const penalized = delta > 0 ? (cutoff && s.simul + 1 >= cutoff) : (cutoff && s.simul >= cutoff);
+			let taken;
+			if (delta > 0) {
+				// The penalty applies from the cutoff-th simul on (1-based), but
+				// only takes a point from a fighter who has one.
+				const penalized = cutoff && s.simul + 1 >= cutoff;
+				taken = s.fighters.map(f => (penalized && f.score > 0 ? 1 : 0));
+				s.simulPenalties.push(taken);
+				s.fighters.forEach((f, i) => { f.score -= taken[i]; });
+			} else {
+				taken = s.simulPenalties.pop() ?? [0, 0];
+				s.fighters.forEach((f, i) => { f.score += taken[i]; });
+			}
 			s.simul += delta;
-			if (penalized) for (const f of s.fighters) f.score -= delta;
-			this.#logEvent(s, 'simul', { delta, penalty: !!penalized });
+			this.#logEvent(s, 'simul', { delta, taken });
 			this.#afterScoring(s);
 		});
 	}
@@ -295,6 +308,7 @@ export class Store {
 	#resetRound(s) {
 		for (const f of s.fighters) f.score = 0;
 		s.simul = 0;
+		s.simulPenalties = [];
 		s.suddenDeath = false;
 		s.remaining = s.settings.duration;
 		s.startedAt = null;
@@ -322,6 +336,7 @@ export class Store {
 	swapSides() {
 		return this.apply(s => {
 			s.fighters.reverse();
+			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
 			for (const e of s.log) {
 				e.scores = [...e.scores].reverse();
 				if (typeof e.side === 'number') e.side = 1 - e.side;
@@ -401,7 +416,13 @@ export function describeEvent(s, e) {
 	const who = i => (typeof i === 'number' ? fighterLabel(s, i) : '');
 	switch (e.kind) {
 	case 'point': return `${e.delta > 0 ? '+1' : '−1'} ${who(e.side)}`;
-	case 'simul': return e.delta > 0 ? `Simul${e.penalty ? ' (−1 both)' : ''}` : 'Simul removed';
+	case 'simul': {
+		if (e.delta < 0) return 'Simul removed';
+		const taken = e.taken ?? (e.penalty ? [1, 1] : [0, 0]);
+		if (taken[0] && taken[1]) return 'Simul (−1 both)';
+		if (taken[0] || taken[1]) return `Simul (−1 ${who(taken[0] ? 0 : 1)})`;
+		return 'Simul';
+	}
 	case 'time-up': return 'Time up';
 	case 'round-ended': return 'Round ended early';
 	case 'tiebreaker': return 'Tiebreaker (sudden death)';

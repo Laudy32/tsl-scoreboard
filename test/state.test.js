@@ -42,6 +42,20 @@ test('simul penalty starts at the cutoff and undoes cleanly', () => {
 	assert.equal(store.addSimul(-1), false, 'cannot go below zero simuls');
 });
 
+test('scores never go below zero', () => {
+	const { store, s } = setup({ simulCutoff: 1 });
+	assert.equal(store.addPoint(0, -1), false);
+	assert.equal(s().fighters[0].score, 0);
+	store.addPoint(1);
+	store.addSimul();
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0], 'penalty only takes from a fighter who has a point');
+	store.addSimul();
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+	store.addSimul(-1);
+	store.addSimul(-1);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 1], 'removing simuls gives back exactly what they took');
+});
+
 test('tie goes to sudden death, next point ends it', () => {
 	const { store, s } = setup();
 	store.addPoint(0); store.addPoint(1);
