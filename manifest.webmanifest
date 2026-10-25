@@ -1,0 +1,15 @@
+{
+	"name": "The Saber Legion Scoreboard",
+	"short_name": "TSL Score",
+	"description": "Score and time saber bouts for The Saber Legion.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"orientation": "any",
+	"theme_color": "#111111",
+	"background_color": "#111111",
+	"icons": [
+		{ "src": "assets/saber-icon-192.png", "sizes": "192x192", "type": "image/png" },
+		{ "src": "assets/saber-icon.png", "sizes": "512x512", "type": "image/png" }
+	]
+}

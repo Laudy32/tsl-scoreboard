@@ -1,0 +1,9 @@
+{
+	"name": "tsl-scoreboard",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "node --test test/*.test.js",
+		"start": "npx --yes serve -l 8080 ."
+	}
+}
