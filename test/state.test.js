@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store, initialState, timeLeft, parseClock, formatClock, matchWinner, normalize } from '../js/state.js';
+import { Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize } from '../js/state.js';
+
+const D = DEFAULT_SETTINGS.duration;
 
 function setup(settings = {}) {
 	let now = 1_000_000;
@@ -15,12 +17,12 @@ test('clock runs, pauses and expires', () => {
 	const { store, s, advance } = setup();
 	store.start();
 	advance(60_000);
-	assert.equal(timeLeft(s(), 1_060_000), 4 * 60_000);
+	assert.equal(timeLeft(s(), 1_060_000), D - 60_000);
 	store.pause();
 	advance(10_000);
-	assert.equal(s().remaining, 4 * 60_000);
+	assert.equal(s().remaining, D - 60_000);
 	store.start();
-	advance(5 * 60_000);
+	advance(D);
 	assert.equal(store.expire(), true);
 	assert.equal(s().remaining, 0);
 	assert.equal(s().startedAt, null);
@@ -79,7 +81,7 @@ test('undo of a point keeps the running clock going', () => {
 	advance(10_000);
 	store.undo();
 	assert.equal(s().fighters[0].score, 0);
-	assert.equal(timeLeft(s(), 1_020_000), 5 * 60_000 - 20_000);
+	assert.equal(timeLeft(s(), 1_020_000), D - 20_000);
 	assert.equal(s().log.length, 0);
 });
 
@@ -87,7 +89,7 @@ test('undo of a time change restores the old time', () => {
 	const { store, s } = setup();
 	store.setTime(90_000);
 	store.undo();
-	assert.equal(s().remaining, 5 * 60_000);
+	assert.equal(s().remaining, D);
 });
 
 test('undo of next round restores the finished round', () => {
@@ -136,7 +138,7 @@ test('pause after scoring', () => {
 	advance(1000);
 	store.addPoint(0);
 	assert.equal(s().startedAt, null);
-	assert.equal(s().remaining, 5 * 60_000 - 1000);
+	assert.equal(s().remaining, D - 1000);
 });
 
 test('clock parsing and formatting', () => {

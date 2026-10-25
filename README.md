@@ -9,7 +9,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 
 ## What it does
 
-- Round timer (default 5:00), tap the clock or press Space to start and pause
+- Round timer (default 2:30), tap the clock or press Space to start and pause
 - +1 / −1 for each fighter, and a simul counter: every simul from the 3rd on
   (configurable) takes a point from both fighters
 - Time up shows the winner; a tie goes to a 30-second sudden-death tiebreaker

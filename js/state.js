@@ -12,7 +12,7 @@ export const COLORS = {
 };
 
 export const DEFAULT_SETTINGS = {
-	duration: 5 * 60 * 1000,
+	duration: 2.5 * 60 * 1000,
 	tiebreakerDuration: 30 * 1000,
 	/** Each simul at or past this count takes 1 point from both fighters. 0 = never. */
 	simulCutoff: 3,
