@@ -36,7 +36,7 @@ export const DEFAULT_SETTINGS = {
 export const MATCH_PRESETS = [
 	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, pointsToWin: 10, liveScore: true } },
 	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'unity', label: 'Unity', note: '1:00, no live score', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
+	{ id: 'unity', label: 'Unity', note: '1:00', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
 ];
 
 export const DIVISIONS = ['Standard', 'Exotics', 'Unity', 'Tag Team', 'Redemption', 'Masters', "Women's", 'Championship Series'];

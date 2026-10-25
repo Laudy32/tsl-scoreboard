@@ -90,8 +90,7 @@ function rulesLine(s) {
 	const p = activePreset(st);
 	if (p) return `${p.label} · ${p.note}`;
 	const parts = [formatClock(st.duration, { hundredths: false })];
-	if (!st.liveScore) parts.push('no live score');
-	else if (st.pointsToWin) parts.push(`first to ${st.pointsToWin}`);
+	if (st.liveScore && st.pointsToWin) parts.push(`first to ${st.pointsToWin}`);
 	return `Custom · ${parts.join(', ')}`;
 }
 
@@ -180,7 +179,7 @@ function renderControl(s) {
 					<span class="hint">${cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
 				</button>
 				<button class="btn minus" data-action="simul" data-delta="-1" ${s.simul ? '' : 'disabled'}>−1 <kbd>S</kbd></button>
-			</div>` : '<div class="fighter vs"><span>vs</span><small>No live score</small></div>'}
+			</div>` : '<div class="fighter vs"><span>vs</span></div>'}
 			${fighterPanel(s, 1)}
 		</div>
 
