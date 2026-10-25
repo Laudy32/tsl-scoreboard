@@ -3,6 +3,8 @@
 A scoreboard and timer for The Saber Legion bouts. It runs in any modern
 browser, works offline once loaded, and can be added to a phone's home screen.
 
+**Live: https://laudy32.github.io/tsl-scoreboard/**
+
 Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/saber-legion) app.
 
 ## What it does
