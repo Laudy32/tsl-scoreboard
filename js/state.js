@@ -27,8 +27,11 @@ export const DEFAULT_SETTINGS = {
 	/** Divisions typed in by the club, kept so they can be picked again. */
 	customDivisions: [],
 	pauseAfterScoring: false,
-	/** After time runs out, hide the winner until the judge reveals it. */
-	holdWinnerAtTimeUp: false,
+	/**
+	 * At 0:00 the table calls a Final Exchange: fighting goes on until the
+	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
+	 */
+	finalExchange: true,
 	sound: true,
 };
 
@@ -36,7 +39,16 @@ export const DEFAULT_SETTINGS = {
 export const MATCH_PRESETS = [
 	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, pointsToWin: 10, liveScore: true } },
 	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'unity', label: 'Unity', note: '1:00', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
+	{
+		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
+		settings: { duration: 60_000, pointsToWin: 0, liveScore: false },
+		// Unity round lengths by format (Rules 9.02). Any of them still counts as this preset.
+		durations: [
+			{ ms: 60_000, label: '1:00', note: 'Pools' },
+			{ ms: 90_000, label: '1:30', note: 'Single elim, CS' },
+			{ ms: 120_000, label: '2:00', note: 'CS only' },
+		],
+	},
 ];
 
 /** Only Championship Series is fought over rounds (best of 3); every other division is one bout. */
@@ -45,11 +57,22 @@ export const CS_ROUNDS_TO_WIN = 2;
 
 export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
 
+/** In Tag Team a simul makes both teams switch fighters instead of costing points (Rules 8.04). */
+export const TAG_TEAM_DIVISION = 'Tag Team';
+export const isTagTeam = s => s.settings.division === TAG_TEAM_DIVISION;
+
 export const DIVISIONS = ['Standard', 'Exotics', 'Unity', 'Tag Team', 'Redemption', 'Masters', "Women's", 'Championship Series'];
 
 /** The preset the current rules match, or null if they've been changed by hand. */
 export function activePreset(settings) {
-	return MATCH_PRESETS.find(p => Object.entries(p.settings).every(([k, v]) => settings[k] === v)) ?? null;
+	return MATCH_PRESETS.find(p => Object.entries(p.settings).every(([k, v]) =>
+		settings[k] === v || (k === 'duration' && p.durations?.some(d => d.ms === settings.duration)))) ?? null;
+}
+
+/** A preset's summary for the current rules, e.g. "1:30" once a Unity length is picked. */
+export function presetNote(p, settings) {
+	const d = activePreset(settings) === p && p.durations?.find(x => x.ms === settings.duration);
+	return d ? d.label : p.note;
 }
 
 const UNDO_LIMIT = 100;
@@ -67,9 +90,13 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
+		/** Time is up but the last exchange is still being fought. */
+		finalExchange: false,
+		/** Tag Team, after a simul: which teams paid a point to keep their fighter in. Null when no switch is due. */
+		tagSwitch: null,
 		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
 		stoppedAtTarget: null,
-		showWinner: !settings.holdWinnerAtTimeUp,
+		showWinner: true,
 		/** Time left as of the last start/pause. */
 		remaining: settings.duration,
 		/** Epoch ms of the last start/resume, or null while paused. */
@@ -198,6 +225,8 @@ export class Store {
 		return this.apply(s => {
 			if (isRunning(s) || timeLeft(s) === 0) return false;
 			s.startedAt = this.now();
+			// Fighting again means any fighter switch has been made.
+			s.tagSwitch = null;
 		}, { undoable: false });
 	}
 
@@ -219,8 +248,34 @@ export class Store {
 			if (!isRunning(s) || timeLeft(s, this.now()) > 0) return false;
 			s.remaining = 0;
 			s.startedAt = null;
-			this.#logEvent(s, 'time-up');
+			if (s.settings.finalExchange && s.settings.liveScore && !s.suddenDeath) {
+				s.finalExchange = true;
+				s.showWinner = false;
+				this.#logEvent(s, 'final-exchange');
+			} else {
+				this.#logEvent(s, 'time-up');
+			}
 		}, { undoable: false });
+	}
+
+	/** True while a final exchange can't end without a point: the scores are one apart (Rules 5.13-2b). */
+	pointRequired() {
+		const [a, b] = this.state.fighters;
+		return this.state.finalExchange && Math.abs(a.score - b.score) === 1;
+	}
+
+	/** The final exchange ends with no point ("No call", or no attempt to score). */
+	noCall() {
+		return this.apply(s => {
+			if (!s.finalExchange) return false;
+			this.#endFinalExchange(s);
+			this.#logEvent(s, 'no-call');
+		});
+	}
+
+	#endFinalExchange(s) {
+		s.finalExchange = false;
+		s.showWinner = true;
 	}
 
 	setTime(ms) {
@@ -266,7 +321,7 @@ export class Store {
 			s.remaining = 0;
 			s.startedAt = null;
 		}
-		if (timeLeft(s, this.now()) === 0) s.showWinner = true;
+		if (timeLeft(s, this.now()) === 0 && !s.finalExchange) s.showWinner = true;
 		if (s.settings.pauseAfterScoring && isRunning(s)) {
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
@@ -279,6 +334,9 @@ export class Store {
 			// Scores never go below zero.
 			if (s.fighters[side].score + delta < 0) return false;
 			s.fighters[side].score += delta;
+			s.tagSwitch = null;
+			// An awarded point always resolves the final exchange; taking one back doesn't.
+			if (s.finalExchange && delta > 0) this.#endFinalExchange(s);
 			this.#logEvent(s, 'point', { side, delta });
 			this.#afterScoring(s);
 		});
@@ -291,25 +349,55 @@ export class Store {
 			const cutoff = s.settings.simulCutoff;
 			let taken;
 			if (delta > 0) {
+				// A simul ends the final exchange, unless the scores are one
+				// apart: then only a point can (Rules 5.13-2b).
+				if (s.finalExchange && !this.pointRequired()) this.#endFinalExchange(s);
 				// The penalty applies from the cutoff-th simul on (1-based), and
 				// only while both fighters have a point to lose. If either is at
-				// zero, nobody loses one.
-				const penalized = cutoff && s.simul + 1 >= cutoff && s.fighters.every(f => f.score > 0);
+				// zero, nobody loses one. Tag Team switches fighters instead.
+				const tag = isTagTeam(s);
+				const penalized = !tag && cutoff && s.simul + 1 >= cutoff && s.fighters.every(f => f.score > 0);
 				taken = s.fighters.map(() => (penalized ? 1 : 0));
 				s.simulPenalties.push(taken);
 				s.fighters.forEach((f, i) => { f.score -= taken[i]; });
+				s.tagSwitch = tag ? { stayed: [false, false] } : null;
 			} else {
 				taken = s.simulPenalties.pop() ?? [0, 0];
 				s.fighters.forEach((f, i) => { f.score += taken[i]; });
 			}
 			s.simul += delta;
-			this.#logEvent(s, 'simul', { delta, taken });
+			this.#logEvent(s, 'simul', { delta, taken, ...(delta > 0 && isTagTeam(s) ? { tag: true } : {}) });
 			this.#afterScoring(s);
 		});
 	}
 
+	/** Can this team pay a point to keep its fighter in? Not with no points, and never in sudden death (Rules 8.04, 8.05). */
+	canStay(side) {
+		const s = this.state;
+		return !!s.tagSwitch && !s.tagSwitch.stayed[side] && !s.suddenDeath && s.fighters[side].score > 0;
+	}
+
+	/** Tag Team: this team takes −1 to skip the switch the simul called for. */
+	stay(side) {
+		if (!this.canStay(side)) return false;
+		return this.apply(s => {
+			s.fighters[side].score -= 1;
+			s.tagSwitch.stayed[side] = true;
+			this.#logEvent(s, 'stay', { side });
+		});
+	}
+
+	/** The fighters have switched; clear the call from the screens. */
+	switchDone() {
+		return this.apply(s => {
+			if (!s.tagSwitch) return false;
+			s.tagSwitch = null;
+		}, { undoable: false });
+	}
+
 	toggleShowWinner() {
 		return this.apply(s => {
+			if (s.finalExchange) return false;
 			s.showWinner = !s.showWinner;
 		}, { undoable: false });
 	}
@@ -320,6 +408,7 @@ export class Store {
 	nextRoundAction() {
 		const s = this.state;
 		if (timeLeft(s, this.now()) > 0) return null;
+		if (s.finalExchange) return null;
 		if (matchWinner(s) !== null) return null;
 		// Without a live score there's no winner or tiebreaker to decide here.
 		if (!s.settings.liveScore) return 'next';
@@ -358,10 +447,12 @@ export class Store {
 		s.simul = 0;
 		s.simulPenalties = [];
 		s.suddenDeath = false;
+		s.finalExchange = false;
+		s.tagSwitch = null;
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
 		s.startedAt = null;
-		s.showWinner = !s.settings.holdWinnerAtTimeUp;
+		s.showWinner = true;
 	}
 
 	resetRound() {
@@ -419,8 +510,10 @@ export class Store {
 				!s.fighters.some(f => f.score) && s.simul === 0) {
 				s.remaining = s.settings.duration;
 			}
-			if ('holdWinnerAtTimeUp' in changes && timeLeft(s, this.now()) > 0) {
-				s.showWinner = !changes.holdWinnerAtTimeUp;
+			// Turning Final Exchange off mid-exchange decides the bout now.
+			if (changes.finalExchange === false && s.finalExchange) {
+				s.finalExchange = false;
+				s.showWinner = true;
 			}
 		}, { undoable: false });
 	}
@@ -515,12 +608,16 @@ export function describeEvent(s, e) {
 	case 'point': return `${e.delta > 0 ? '+1' : '−1'} ${who(e.side)}`;
 	case 'simul': {
 		if (e.delta < 0) return 'Simul removed';
+		if (e.tag) return 'Simul (switch fighters)';
 		const taken = e.taken ?? (e.penalty ? [1, 1] : [0, 0]);
 		if (taken[0] && taken[1]) return 'Simul (−1 both)';
 		if (taken[0] || taken[1]) return `Simul (−1 ${who(taken[0] ? 0 : 1)})`;
 		return 'Simul';
 	}
 	case 'time-up': return 'Time up';
+	case 'final-exchange': return 'Final exchange';
+	case 'no-call': return 'No call, bout over';
+	case 'stay': return `${who(e.side)} took −1 to stay in`;
 	case 'target-reached': return `${who(e.side)} reached ${e.scores[e.side]}`;
 	case 'round-ended': return 'Round ended early';
 	case 'tiebreaker': return 'Tiebreaker (sudden death)';

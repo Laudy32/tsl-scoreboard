@@ -307,6 +307,24 @@ kbd {
 .btn.primary.pause { background: var(--stop); color: #fff; }
 .btn.primary.pause:hover { background: #f5850f; }
 
+/* Final exchange and Tag Team switch calls */
+.fe-note { margin: 0; text-align: center; color: var(--muted); font-size: 15px; }
+.fe-note strong { color: var(--danger); }
+.switch-call {
+	margin-top: 4px;
+	padding: 12px;
+	border: 1px solid var(--gold);
+	border-radius: var(--radius);
+	background: #2a2415;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.switch-title { text-align: center; font: 800 26px/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; color: var(--gold); }
+.switch-call .row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; }
+.switch-call .btn[data-action="stay"] { border-color: var(--c); }
+.stayed { display: flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--c); color: #fff; font-weight: 700; padding: 8px; }
+
 .help { color: var(--muted); font-size: 15px; margin-top: 8px; }
 .help summary { cursor: pointer; padding: 6px 0; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; font-size: 13px; }
 .help td { padding: 3px 12px 3px 0; }
@@ -396,7 +414,10 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 .fighter-fields label { clear: both; }
 
 .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.presets.lengths .preset { padding: 8px 12px; }
 @media (max-width: 480px) { .presets { grid-template-columns: 1fr; } }
+.presets.lengths { grid-template-columns: repeat(3, 1fr); }
+.lengths-label { margin: 14px 0 6px; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .preset {
 	display: flex;
 	flex-direction: column;
@@ -493,6 +514,7 @@ body[data-view=display] {
 }
 .d-clock.up { color: var(--danger); }
 .d-status { min-height: 7vh; }
+.d-switch { display: inline-block; margin-top: 1vh; padding: 0.6vh 2.5vw; border-radius: 1vh; background: var(--gold); color: #16120a; font: 900 5vh/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .d-status .status { font-size: 6vh; }
 .d-status .status.muted { font-size: 3vh; color: #6d727a; }
 .d-status .status.win { display: inline-block; background: var(--c); color: #fff; padding: 0.4vh 2.5vw; border-radius: 1vh; }

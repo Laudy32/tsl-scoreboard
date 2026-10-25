@@ -10,15 +10,19 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 ## What it does
 
 - Match types that load the rules in one tap: Standard (2:30, first to 10),
-  2 Minute Standard (2:00, first to 10) and Unity (1:00, no live score)
+  2 Minute Standard (2:00, first to 10) and Unity (no live score; 1:00 for
+  pools, 1:30 for single elimination and CS, 2:00 for CS only)
 - A division header on the scoreboard and spectator display (Standard,
   Exotics, Unity, Tag Team, Redemption, Masters, Women's, Championship
   Series, or your own, which are remembered)
 - Round timer (default 2:30), tap the clock or press Space to start and pause
 - +1 / −1 for each fighter, and a simul counter: every simul from the 3rd on
-  (configurable) takes a point from both fighters
+  (configurable) takes a point from both fighters. In Tag Team a simul calls
+  a fighter switch instead, and each team can take −1 to keep its fighter in
 - The round ends when a fighter reaches the points target (10 by default) or
-  time runs out. Time up shows the winner; a tie goes to a 30-second sudden-death tiebreaker
+  time runs out. At 0:00 the table calls a Final Exchange: it ends on a point,
+  a simul or No call (only a point if the scores are one apart), then the
+  winner shows; a tie goes to a 30-second sudden-death tiebreaker
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
@@ -34,7 +38,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 | Q / A | +1 / −1 left fighter |
 | W / S | +1 / −1 simul |
 | E / D | +1 / −1 right fighter |
-| Space | Start / pause (show winner after time up) |
+| Space | Start / pause (show or hide the winner once the bout is decided) |
 | N | Next round or tiebreaker |
 | Z | Undo |
 | F | Open spectator display |

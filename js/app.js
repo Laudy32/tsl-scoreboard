@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, usesRounds,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -72,6 +72,7 @@ function statusLine(s) {
 	if (mw !== null) {
 		return `<span class="status win" style="--c:${hex(s.fighters[mw].color)}">Match won by <strong>${esc(fighterLabel(s, mw))}</strong></span>`;
 	}
+	if (s.finalExchange) return '<span class="status alert">Final exchange</span>';
 	if (timeLeft(s) === 0) {
 		if (!s.settings.liveScore) return '<span class="status alert">Time up</span>';
 		if (!s.showWinner && !s.suddenDeath) return '<span class="status alert">Time up</span>';
@@ -88,7 +89,7 @@ function statusLine(s) {
 function rulesLine(s) {
 	const st = s.settings;
 	const p = activePreset(st);
-	if (p) return `${p.label} · ${p.note}`;
+	if (p) return `${p.label} · ${presetNote(p, st)}`;
 	const parts = [formatClock(st.duration, { hundredths: false })];
 	if (st.liveScore && st.pointsToWin) parts.push(`first to ${st.pointsToWin}`);
 	return `Custom · ${parts.join(', ')}`;
@@ -111,13 +112,40 @@ function clockHTML(text) {
 
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
-		return '<button class="btn primary" data-action="next">${nextLabel(s)}</button>';
+		return `<button class="btn primary" data-action="next">${nextLabel(s)}</button>`;
 	}
+	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
 	if (isRunning(s)) return '<button class="btn primary pause" data-action="clock">Pause</button>';
 	return `<button class="btn primary go" data-action="clock">${hasStarted(s) ? 'Resume' : 'Start'}</button>`;
+}
+
+/** What the table does during the final exchange. */
+function finalExchangeNote() {
+	return store.pointRequired()
+		? '<p class="fe-note"><strong>One point apart:</strong> a point must be awarded. A simul or no call doesn\'t end the bout.</p>'
+		: '<p class="fe-note">Score the last exchange with a point or Simul, or end it with No call. Ring outs don\'t count.</p>';
+}
+
+/** Tag Team, after a simul: who switches and who paid to stay in. */
+function switchText(s) {
+	const stayed = s.tagSwitch.stayed;
+	if (!stayed[0] && !stayed[1]) return 'Switch fighters';
+	return [0, 1].map(i => `${esc(fighterLabel(s, i))} ${stayed[i] ? 'stays (−1)' : 'switches'}`).join(' · ');
+}
+
+function switchPanel(s) {
+	if (!s.tagSwitch) return '';
+	const stayButton = i => (s.tagSwitch.stayed[i]
+		? `<span class="stayed" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))} stays</span>`
+		: `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="stay" data-side="${i}" ${store.canStay(i) ? '' : 'disabled'}>${esc(fighterLabel(s, i))}: −1 to stay</button>`);
+	return `<div class="switch-call">
+		<div class="switch-title">${switchText(s)}</div>
+		<div class="row">${stayButton(0)}<button class="btn" data-action="switch-done">Switched</button>${stayButton(1)}</div>
+		<p class="fe-note">${s.suddenDeath ? 'Sudden death: both teams must switch.' : 'A team with no points must switch.'}</p>
+	</div>`;
 }
 
 function fighterPanel(s, side) {
@@ -179,15 +207,17 @@ function renderControl(s) {
 				<button class="score-btn" data-action="simul" aria-label="Add a simul">
 					<span class="name">Simul</span>
 					<span class="score">${s.simul}</span>
-					<span class="hint">${cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
+					<span class="hint">${isTagTeam(s) ? 'forces a switch' : cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
 				</button>
 				<button class="btn minus" data-action="simul" data-delta="-1" ${s.simul ? '' : 'disabled'}>−1 <kbd>S</kbd></button>
 			</div>` : '<div class="fighter vs"><span>vs</span></div>'}
 			${fighterPanel(s, 1)}
 		</div>
 
+		${switchPanel(s)}
 		<div class="actions">
 			${primaryButton(s)}
+			${s.finalExchange ? finalExchangeNote() : ''}
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
 				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>` : ''}
@@ -202,7 +232,7 @@ function renderControl(s) {
 				<tr><td><kbd>Q</kbd> / <kbd>A</kbd></td><td>+1 / −1 left fighter</td></tr>
 				<tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>+1 / −1 simul</td></tr>
 				<tr><td><kbd>E</kbd> / <kbd>D</kbd></td><td>+1 / −1 right fighter</td></tr>
-				<tr><td><kbd>Space</kbd></td><td>Start / pause (show winner after time up)</td></tr>
+				<tr><td><kbd>Space</kbd></td><td>Start / pause (show or hide the winner once the bout is decided)</td></tr>
 				<tr><td><kbd>N</kbd></td><td>Next round (next match outside Championship Series) or tiebreaker</td></tr>
 				<tr><td><kbd>Z</kbd></td><td>Undo</td></tr>
 				<tr><td><kbd>F</kbd></td><td>Open the spectator display</td></tr>
@@ -231,6 +261,7 @@ function renderDisplay(s) {
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
+			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -256,9 +287,14 @@ function colorOptions(selected) {
 function presetsHTML(st) {
 	const preset = activePreset(st);
 	const buttons = MATCH_PRESETS.map(p => `<button type="button" class="preset${preset?.id === p.id ? ' on' : ''}" data-action="preset" data-preset="${p.id}" aria-pressed="${preset?.id === p.id}">
-		<strong>${esc(p.label)}</strong><span>${esc(p.note)}</span>
+		<strong>${esc(p.label)}</strong><span>${esc(presetNote(p, st))}</span>
 	</button>`).join('');
+	// Unity offers a round length per format.
+	const lengths = preset?.durations ? `<p class="lengths-label">${esc(preset.label)} round length</p><div class="presets lengths" role="group" aria-label="${esc(preset.label)} round length">${preset.durations.map(d => `<button type="button" class="preset${st.duration === d.ms ? ' on' : ''}" data-action="duration" data-ms="${d.ms}" aria-pressed="${st.duration === d.ms}">
+			<strong>${esc(d.label)}</strong><span>${esc(d.note)}</span>
+		</button>`).join('')}</div>` : '';
 	return `<div class="presets">${buttons}</div>
+		${lengths}
 		${preset ? '' : '<p class="muted small-note">These rules have been changed by hand. Pick a match type to load its rules.</p>'}`;
 }
 
@@ -325,7 +361,7 @@ function renderSettings(s) {
 			</div>
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
-			<label class="check"><input type="checkbox" data-setting="holdWinnerAtTimeUp" ${st.holdWinnerAtTimeUp ? 'checked' : ''} /> At time up, wait for last points before showing the winner</label>
+			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
 			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time up</label>
 		</section>
 
@@ -516,6 +552,16 @@ const actions = {
 	point: el => store.addPoint(+el.dataset.side, +(el.dataset.delta || 1)),
 	simul: el => store.addSimul(+(el.dataset.delta || 1)),
 	winner: () => store.toggleShowWinner(),
+	'no-call': async () => {
+		if (store.pointRequired() && !await confirmAction('The scores are one point apart, so the rules say a point must be awarded. End the bout with no point anyway?', 'End with no point')) return;
+		store.noCall();
+	},
+	stay: el => store.stay(+el.dataset.side),
+	'switch-done': () => store.switchDone(),
+	duration: el => {
+		store.updateSettings({ duration: +el.dataset.ms });
+		refreshSettings();
+	},
 	undo: () => store.undo(),
 	next: () => store.nextRound(),
 	end: async () => {

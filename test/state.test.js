@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds,
+	activePreset, describeEvent, usesRounds, presetNote,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -221,6 +221,9 @@ test('presets load their rules and are recognized', () => {
 	assert.equal(s().remaining, 60_000);
 	assert.equal(activePreset(s().settings).id, 'unity');
 	store.updateSettings({ duration: 90_000 });
+	assert.equal(activePreset(s().settings).id, 'unity', '1:30 is one of the Unity lengths');
+	assert.equal(presetNote(activePreset(s().settings), s().settings), '1:30');
+	store.updateSettings({ duration: 75_000 });
 	assert.equal(activePreset(s().settings), null, 'edited rules no longer match a preset');
 	assert.equal(store.applyPreset('nope'), false);
 });
@@ -301,4 +304,125 @@ test('best of 3 ends after two round wins', () => {
 	store.addPoint(1); store.endRoundNow(); store.nextRound();
 	store.addPoint(0); store.endRoundNow(); store.nextRound();
 	assert.equal(matchWinner(s()), 0);
+});
+
+function runOut(store, advance) {
+	store.start();
+	advance(D);
+	store.expire();
+}
+
+test('time up calls a final exchange instead of a winner', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(0);
+	runOut(store, advance);
+	assert.equal(s().finalExchange, true);
+	assert.equal(s().showWinner, false);
+	assert.equal(store.nextRoundAction(), null, 'nothing moves on until the exchange resolves');
+	assert.equal(store.toggleShowWinner(), false);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Final exchange');
+	store.addPoint(1);
+	assert.equal(s().finalExchange, false, 'a point resolves it');
+	assert.equal(s().showWinner, true);
+	assert.equal(store.nextRoundAction(), 'next');
+	store.undo();
+	assert.equal(s().finalExchange, true, 'undo puts the exchange back');
+	assert.equal(s().fighters[1].score, 0);
+});
+
+test('one point apart, only a point ends the final exchange', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(1);
+	runOut(store, advance);
+	assert.equal(store.pointRequired(), true);
+	store.addSimul();
+	assert.equal(s().finalExchange, true, 'a simul at 2–1 does not end it');
+	store.addPoint(0, -1);
+	assert.equal(s().finalExchange, true, 'taking a point back does not end it');
+	store.undo();
+	store.addPoint(1);
+	assert.equal(s().finalExchange, false, 'the point is awarded');
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+});
+
+test('a simul or no call ends the final exchange when not one apart', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0);
+	runOut(store, advance);
+	assert.equal(store.pointRequired(), false);
+	store.addSimul();
+	assert.equal(s().finalExchange, false);
+	assert.equal(s().showWinner, true);
+	store.undo();
+	assert.equal(store.noCall(), true);
+	assert.equal(s().finalExchange, false);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'No call, bout over');
+	assert.equal(store.noCall(), false);
+});
+
+test('no final exchange in sudden death, without a live score, or when turned off', () => {
+	const sd = setup();
+	sd.store.addPoint(0); sd.store.addPoint(1);
+	sd.store.endRoundNow();
+	sd.store.nextRound();
+	sd.store.start();
+	sd.advance(30_000);
+	sd.store.expire();
+	assert.equal(sd.s().finalExchange, false);
+
+	const off = setup({ finalExchange: false });
+	runOut(off.store, off.advance);
+	assert.equal(off.s().finalExchange, false);
+	assert.equal(off.s().showWinner, true);
+
+	const unity = setup();
+	unity.store.applyPreset('unity');
+	unity.store.start();
+	unity.advance(60_000);
+	unity.store.expire();
+	assert.equal(unity.s().finalExchange, false);
+});
+
+test('turning final exchange off mid-exchange decides the bout', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0);
+	runOut(store, advance);
+	store.updateSettings({ finalExchange: false });
+	assert.equal(s().finalExchange, false);
+	assert.equal(s().showWinner, true);
+});
+
+test('tag team simuls call a switch instead of taking points', () => {
+	const { store, s } = setup({ simulCutoff: 1 });
+	store.setDivision('Tag Team');
+	store.addPoint(0); store.addPoint(0);
+	store.addSimul();
+	assert.deepEqual(s().fighters.map(f => f.score), [2, 0], 'no deduction');
+	assert.deepEqual(s().tagSwitch, { stayed: [false, false] });
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Simul (switch fighters)');
+	assert.equal(store.canStay(1), false, 'a team with no points must switch');
+	assert.equal(store.stay(1), false);
+	assert.equal(store.stay(0), true);
+	assert.equal(s().fighters[0].score, 1);
+	assert.equal(store.canStay(0), false, 'once per simul');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue took −1 to stay in');
+	store.undo();
+	assert.equal(s().fighters[0].score, 2);
+	store.switchDone();
+	assert.equal(s().tagSwitch, null);
+	store.addSimul();
+	store.start();
+	assert.equal(s().tagSwitch, null, 'restarting the fight clears the call');
+});
+
+test('tag team sudden death: a simul forces both switches', () => {
+	const { store, s } = setup();
+	store.setDivision('Tag Team');
+	store.addPoint(0); store.addPoint(1);
+	store.endRoundNow();
+	store.nextRound();
+	store.addSimul();
+	assert.ok(s().tagSwitch);
+	assert.equal(store.canStay(0), false);
+	assert.equal(store.canStay(1), false);
 });
