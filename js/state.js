@@ -246,10 +246,11 @@ export class Store {
 			const cutoff = s.settings.simulCutoff;
 			let taken;
 			if (delta > 0) {
-				// The penalty applies from the cutoff-th simul on (1-based), but
-				// only takes a point from a fighter who has one.
-				const penalized = cutoff && s.simul + 1 >= cutoff;
-				taken = s.fighters.map(f => (penalized && f.score > 0 ? 1 : 0));
+				// The penalty applies from the cutoff-th simul on (1-based), and
+				// only while both fighters have a point to lose. If either is at
+				// zero, nobody loses one.
+				const penalized = cutoff && s.simul + 1 >= cutoff && s.fighters.every(f => f.score > 0);
+				taken = s.fighters.map(() => (penalized ? 1 : 0));
 				s.simulPenalties.push(taken);
 				s.fighters.forEach((f, i) => { f.score -= taken[i]; });
 			} else {
