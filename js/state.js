@@ -32,8 +32,6 @@ export const DEFAULT_SETTINGS = {
 	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
 	 */
 	finalExchange: true,
-	/** Line judges reporting a tally in formats with no live score (Unity, Rules 9.11-9.12). */
-	tallyJudges: 3,
 	sound: true,
 };
 
@@ -80,14 +78,26 @@ export function presetNote(p, settings) {
 const UNDO_LIMIT = 100;
 
 function emptyTally() {
-	return { judges: [[null, null], [null, null], [null, null]], published: false, tieWinner: null };
+	return { judges: [[null, null], [null, null], [null, null]], published: false, votes: [0, 0], tieWinner: null };
 }
 
-/** The judges' totals per fighter, counting only judges who have reported both scores. */
-export function tallyTotals(s) {
-	const n = s.settings.tallyJudges;
-	const done = s.tally.judges.slice(0, n).filter(j => j.every(v => v !== null));
-	return { reported: done.length, totals: [0, 1].map(i => done.reduce((sum, j) => sum + j[i], 0)) };
+/** At least this many line judges must report before a Unity result can be published. */
+export const MIN_JUDGES = 2;
+
+/**
+ * What the judges reported. Each judge who gave both scores casts a vote for
+ * the fighter they scored higher (none if level); the winner comes from the
+ * votes, so one judge with wildly different numbers can't swing it. The
+ * averages are for the record.
+ */
+export function tallyResult(s) {
+	const done = s.tally.judges.filter(j => j.every(v => v !== null));
+	const avg = i => (done.length ? Math.round(done.reduce((sum, j) => sum + j[i], 0) / done.length * 10) / 10 : 0);
+	return {
+		reported: done.length,
+		averages: [avg(0), avg(1)],
+		votes: [0, 1].map(i => done.filter(j => j[i] > j[1 - i]).length),
+	};
 }
 
 function fighter(color) {
@@ -149,7 +159,13 @@ export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.durati
 /** Index of the fighter ahead on points, or null on a tie. */
 export function leader(s) {
 	const [a, b] = s.fighters;
-	if (a.score === b.score) return s.tally?.tieWinner ?? null;
+	// A published Unity result is decided by the judges' votes, not the averages.
+	if (s.tally?.published) {
+		const [x, y] = s.tally.votes;
+		if (x !== y) return x > y ? 0 : 1;
+		return s.tally.tieWinner ?? null;
+	}
+	if (a.score === b.score) return null;
 	return a.score > b.score ? 0 : 1;
 }
 
@@ -420,18 +436,18 @@ export class Store {
 		}, { undoable: false });
 	}
 
-	/** Every judge the table expects has reported both scores. */
+	/** Enough judges have reported both scores to publish. */
 	tallyComplete() {
-		const { reported } = tallyTotals(this.state);
-		return reported === this.state.settings.tallyJudges;
+		return tallyResult(this.state).reported >= MIN_JUDGES;
 	}
 
-	/** Reveals the totals and the winner on every screen. */
+	/** Reveals the averages and the winner on every screen. */
 	publishTally() {
 		if (!this.tallyComplete() || this.state.tally.published) return false;
 		return this.apply(s => {
-			const { totals } = tallyTotals(s);
-			s.fighters.forEach((f, i) => { f.score = totals[i]; });
+			const { averages, votes } = tallyResult(s);
+			s.fighters.forEach((f, i) => { f.score = averages[i]; });
+			s.tally.votes = votes;
 			s.tally.published = true;
 			s.showWinner = true;
 			// Judges report once the round is over, so publishing closes the clock.
@@ -447,6 +463,7 @@ export class Store {
 			if (!s.tally.published) return false;
 			s.fighters.forEach(f => { f.score = 0; });
 			s.tally.published = false;
+			s.tally.votes = [0, 0];
 			s.tally.tieWinner = null;
 			this.#logEvent(s, 'tally-unpublished');
 		}, { clock: true });
@@ -455,7 +472,7 @@ export class Store {
 	/** After a tied tally, the Marshal's sudden death names the winner (Rules 9.12a-2). */
 	setTieWinner(side) {
 		return this.apply(s => {
-			if (!s.tally.published || leader({ ...s, tally: { tieWinner: null } }) !== null) return false;
+			if (!s.tally.published || s.tally.votes[0] !== s.tally.votes[1]) return false;
 			s.tally.tieWinner = side;
 			this.#logEvent(s, 'tie-broken', { side });
 		});
@@ -545,6 +562,7 @@ export class Store {
 			s.fighters.reverse();
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
 			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
+			s.tally.votes = [...s.tally.votes].reverse();
 			if (s.tally.tieWinner !== null) s.tally.tieWinner = 1 - s.tally.tieWinner;
 			for (const e of s.log) {
 				e.scores = [...e.scores].reverse();
@@ -684,7 +702,7 @@ export function describeEvent(s, e) {
 		return 'Simul';
 	}
 	case 'time-up': return 'Time up';
-	case 'tally-published': return `Judges' tally published ${e.scores[0]}–${e.scores[1]}`;
+	case 'tally-published': return `Judges' tally published (average ${e.scores[0]}–${e.scores[1]})`;
 	case 'tally-unpublished': return 'Tally taken back';
 	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
 	case 'final-exchange': return 'Final exchange';

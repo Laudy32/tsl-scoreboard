@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, tallyTotals,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, tallyResult, MIN_JUDGES,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -148,21 +148,24 @@ function switchPanel(s) {
 	</div>`;
 }
 
+/** Scores can be averages, so show a decimal only when there is one. */
+const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
 /** Unity: line judges report their silent tallies here; nothing shows on the display until it's published. */
 function tallyPanel(s) {
 	if (s.settings.liveScore) return '';
-	const n = s.settings.tallyJudges;
-	const { totals } = tallyTotals(s);
+	const { reported, averages, votes } = tallyResult(s);
 	const locked = s.tally.published;
 	const head = [0, 1].map(i => `<span class="tally-name" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))}</span>`).join('');
-	const rows = Array.from({ length: n }, (_, j) => `<div class="tally-row"><span>Judge ${j + 1}</span>${[0, 1].map(i => {
-		const v = s.tally.judges[j][i];
+	const rows = s.tally.judges.map((judge, j) => `<div class="tally-row"><span>Judge ${j + 1}${j >= MIN_JUDGES ? ' <small>(optional)</small>' : ''}</span>${[0, 1].map(i => {
+		const v = judge[i];
 		return `<input type="number" min="0" inputmode="numeric" data-tally="${j}-${i}" value="${v ?? ''}" ${locked ? 'disabled' : ''} aria-label="Judge ${j + 1}, ${esc(fighterLabel(s, i))}" />`;
 	}).join('')}</div>`).join('');
+	const voteText = `Judge votes: ${votes[0]}–${votes[1]}`;
 	let foot;
 	if (!locked) {
 		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>
-			<p class="fe-note">Hidden on the display until you publish.</p>`;
+			<p class="fe-note">Needs at least ${MIN_JUDGES} judges. Hidden on the display until you publish.</p>`;
 	} else if (leader(s) === null) {
 		foot = `<p class="fe-note"><strong>Tied.</strong> A pool match can end in a tie. In single elimination the Marshal runs sudden death: who won it?</p>
 			<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>
@@ -174,7 +177,8 @@ function tallyPanel(s) {
 		<h3>Judges' tally</h3>
 		<div class="tally-row tally-head"><span></span>${head}</div>
 		${rows}
-		<div class="tally-row tally-total"><span>Total</span><strong data-tally-total="0">${tallyTotals(s).reported ? totals[0] : '–'}</strong><strong data-tally-total="1">${tallyTotals(s).reported ? totals[1] : '–'}</strong></div>
+		<div class="tally-row tally-total"><span>Average</span><strong data-tally-total="0">${reported ? fmt(averages[0]) : '–'}</strong><strong data-tally-total="1">${reported ? fmt(averages[1]) : '–'}</strong></div>
+		<p class="fe-note" data-tally-votes>${reported ? `${voteText} (the winner follows the votes)` : 'Each judge counts as a vote for the winner.'}</p>
 		${foot}
 	</section>`;
 }
@@ -284,7 +288,7 @@ function renderDisplay(s) {
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
 			<div class="d-name">${esc(fighterLabel(s, i))}</div>
 			${subtitle(f)}
-			${live ? `<div class="d-score">${f.score}</div>` : ''}
+			${live ? `<div class="d-score">${fmt(f.score)}</div>` : ''}
 			${dots(s, i)}
 		</div>`;
 	};
@@ -390,7 +394,6 @@ function renderSettings(s) {
 				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
 				<label>${rounds ? 'Points to win the round' : 'Points to win'} <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
 				${rounds ? `<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>` : ''}
-				${st.liveScore ? '' : `<label>Line judges <select data-setting="tallyJudges" data-kind="int"><option value="2"${st.tallyJudges === 2 ? ' selected' : ''}>2</option><option value="3"${st.tallyJudges === 3 ? ' selected' : ''}>3</option></select></label>`}
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
 			</div>
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
@@ -441,8 +444,10 @@ const historyDialog = $('#history');
 // drop focus from the next field, so just refresh the totals and Publish.
 let tallyEditing = false;
 function refreshTally(s) {
-	const { reported, totals } = tallyTotals(s);
-	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? totals[+el.dataset.tallyTotal] : '–';
+	const { reported, averages, votes } = tallyResult(s);
+	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? fmt(averages[+el.dataset.tallyTotal]) : '–';
+	const note = $('[data-tally-votes]');
+	if (note) note.textContent = reported ? `Judge votes: ${votes[0]}–${votes[1]} (the winner follows the votes)` : 'Each judge counts as a vote for the winner.';
 	const publish = $('[data-action="publish"]');
 	if (publish) publish.disabled = !store.tallyComplete();
 }
