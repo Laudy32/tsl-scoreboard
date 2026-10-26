@@ -2,6 +2,7 @@ import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
 	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES,
+	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -66,6 +67,31 @@ function subtitle(f) {
 	return `<div class="subtitle">${f.subtitle.split('\n').map(esc).join('<br>')}</div>`;
 }
 
+// The card waiting for a reason, or null.
+let pendingCard = null;
+
+/** Small card marks next to a fighter's name: Y, R2, B. */
+function cardChips(f) {
+	const c = f.cards;
+	const chip = (kind, n) => (n ? `<span class="card-chip ${kind}" title="${CARD_NAMES[kind]} card">${n > 1 ? n : ''}</span>` : '');
+	return hasCards(f) ? `<span class="card-chips">${chip('yellow', c.yellow)}${chip('red', c.red)}${chip('black', c.black)}</span>` : '';
+}
+
+function cardButtons(s, side) {
+	return `<div class="cards" role="group" aria-label="Cards for ${esc(fighterLabel(s, side))}">${['yellow', 'red', 'black'].map(card =>
+		`<button class="card-btn ${card}" data-action="card" data-side="${side}" data-card="${card}" aria-label="${CARD_NAMES[card]} card for ${esc(fighterLabel(s, side))}"></button>`).join('')}</div>`;
+}
+
+function cardPanel(s) {
+	if (!pendingCard) return '';
+	const { side, card } = pendingCard;
+	return `<section class="card-panel" style="--c:${hex(s.fighters[side].color)}">
+		<h3>${CARD_NAMES[card]} card · ${esc(fighterLabel(s, side))}</h3>
+		<div class="reasons">${CARD_REASONS.map(r => `<button class="btn" data-action="card-reason" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+		<div class="row"><button class="btn" data-action="card-reason">No reason</button><button class="btn" data-action="card-cancel">Cancel</button></div>
+	</section>`;
+}
+
 const DECISION_LABELS = { unanimous: 'Unanimous decision', split: 'Split decision', draw: 'Draw' };
 
 /** The big line under the clock: winner, tie, time up, sudden death, paused. */
@@ -84,7 +110,8 @@ function statusLine(s) {
 		// A decision by the judges names its kind; a sudden-death winner is just listed.
 		const kind = !s.settings.liveScore && s.tally.tieWinner === null
 			? `<div class="status-sub">${DECISION_LABELS[decisionOf(s.tally.votes)]}</div>` : '';
-		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${kind}`;
+		const forfeit = s.forfeit !== null ? '<div class="status-sub">Forfeit</div>' : '';
+		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${forfeit || kind}`;
 	}
 	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
 	if (s.suddenDeath) return '<span class="status alert">Sudden death</span>';
@@ -196,22 +223,24 @@ function fighterPanel(s, side) {
 	if (!s.settings.liveScore) {
 		return `<div class="fighter" style="--c:${hex(f.color)}">
 			<div class="score-btn no-score">
-				<span class="name">${esc(fighterLabel(s, side))}</span>
+				<span class="name">${esc(fighterLabel(s, side))}${cardChips(f)}</span>
 				${subtitle(f)}
 			</div>
 			${dots(s, side)}
+			${cardButtons(s, side)}
 		</div>`;
 	}
 	const key = side === 0 ? ['Q', 'A'] : ['E', 'D'];
 	return `<div class="fighter" style="--c:${hex(f.color)}">
 		<button class="score-btn" data-action="point" data-side="${side}" aria-label="Add a point for ${esc(fighterLabel(s, side))}">
-			<span class="name">${esc(fighterLabel(s, side))}</span>
+			<span class="name">${esc(fighterLabel(s, side))}${cardChips(f)}</span>
 			${subtitle(f)}
 			<span class="score">${f.score}</span>
 			<span class="hint">tap +1 <kbd>${key[0]}</kbd></span>
 		</button>
 		${dots(s, side)}
 		<button class="btn minus" data-action="point" data-side="${side}" data-delta="-1" ${f.score > 0 ? '' : 'disabled'}>−1 <kbd>${key[1]}</kbd></button>
+		${cardButtons(s, side)}
 	</div>`;
 }
 
@@ -258,6 +287,7 @@ function renderControl(s) {
 		</div>
 
 		${switchPanel(s)}
+		${cardPanel(s)}
 		${tallyPanel(s)}
 		<div class="actions">
 			${primaryButton(s)}
@@ -293,7 +323,7 @@ function renderDisplay(s) {
 	const side = i => {
 		const f = s.fighters[i];
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
-			<div class="d-name">${esc(fighterLabel(s, i))}</div>
+			<div class="d-name">${esc(fighterLabel(s, i))}${cardChips(f)}</div>
 			${subtitle(f)}
 			${live ? `<div class="d-score">${f.score}</div>` : ''}
 			${dots(s, i)}
@@ -352,6 +382,7 @@ function renderSettings(s) {
 			<label>Name <input data-fighter="${side}" data-field="name" value="${esc(f.name)}" autocomplete="off" /></label>
 			<label>Subtitle <textarea data-fighter="${side}" data-field="subtitle" rows="2">${esc(f.subtitle)}</textarea></label>
 			<label>Color <select data-fighter="${side}" data-field="color">${colorOptions(f.color)}</select></label>
+			${hasCards(f) ? `<div class="row">${cardChips(f)}<button type="button" class="btn small" data-action="clear-cards" data-side="${side}">Clear cards</button></div>` : ''}
 			${rounds ? `<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>` : ''}
 		</fieldset>`;
 	};
@@ -609,6 +640,26 @@ function exportCSV() {
 
 const actions = {
 	clock: () => store.toggleClock(),
+	card: async el => {
+		const side = +el.dataset.side, card = el.dataset.card;
+		if (card === 'black' && !await confirmAction(`Black card for ${fighterLabel(store.state, side)}? The bout is forfeited and the clock stops. You can undo this.`, 'Black card')) return;
+		pendingCard = { side, card };
+		render();
+	},
+	'card-reason': el => {
+		if (!pendingCard) return;
+		const { side, card } = pendingCard;
+		pendingCard = null;
+		if (!store.giveCard(side, card, el.dataset.reason || null)) render();
+	},
+	'card-cancel': () => {
+		pendingCard = null;
+		render();
+	},
+	'clear-cards': el => {
+		store.clearCards(+el.dataset.side);
+		refreshSettings();
+	},
 	point: el => store.addPoint(+el.dataset.side, +(el.dataset.delta || 1)),
 	simul: el => store.addSimul(+(el.dataset.delta || 1)),
 	winner: () => store.toggleShowWinner(),

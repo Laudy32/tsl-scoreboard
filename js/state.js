@@ -130,8 +130,17 @@ export function tallyResult(s) {
 	};
 }
 
+/** Why a card was given, from the conduct rules (3.03, 3.04, 4.03, 5.07-7, 5.11-5). */
+export const CARD_REASONS = ['Breach of conduct', 'Intentional ring out', 'Foot fault', 'Excessive force', 'Cornerstone', 'Other'];
+
+export const CARD_NAMES = { yellow: 'Yellow', red: 'Red', black: 'Black' };
+
+const noCards = () => ({ yellow: 0, red: 0, black: 0 });
+
+export const hasCards = f => f.cards.yellow + f.cards.red + f.cards.black > 0;
+
 function fighter(color) {
-	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0 };
+	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0, cards: noCards() };
 }
 
 export function initialState(settings = DEFAULT_SETTINGS) {
@@ -143,6 +152,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
+		/** Side that took a black card and forfeits the bout, or null. */
+		forfeit: null,
 		/** Time is up but the last exchange is still being fought. */
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
@@ -195,6 +206,8 @@ export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.durati
 /** Index of the fighter ahead on points, or null on a tie. */
 export function leader(s) {
 	const [a, b] = s.fighters;
+	// A black card forfeits the bout to the other fighter.
+	if (s.forfeit !== null && s.forfeit !== undefined) return 1 - s.forfeit;
 	// A published Unity result is decided by the judges' votes, not the averages.
 	if (s.tally?.published) {
 		const [x, y] = s.tally.votes;
@@ -527,6 +540,56 @@ export class Store {
 		}, { clock: true });
 	}
 
+	// --- cards (Rules 3.04) ---
+
+	/**
+	 * Gives a card. Yellow is a warning, and a second yellow counts as a red.
+	 * Red takes a point, and may take the score below zero. Black forfeits the bout.
+	 */
+	giveCard(side, card, reason = null) {
+		if (!(card in CARD_NAMES)) return false;
+		return this.apply(s => {
+			const f = s.fighters[side];
+			let effective = card;
+			let converted = false;
+			if (card === 'yellow') {
+				if (f.cards.yellow >= 1) {
+					f.cards.yellow = 0;
+					effective = 'red';
+					converted = true;
+				} else {
+					f.cards.yellow = 1;
+				}
+			}
+			let delta = 0;
+			if (effective === 'red') {
+				f.cards.red++;
+				// Unity keeps no live score here; the card is just recorded.
+				if (s.settings.liveScore) {
+					f.score -= 1;
+					delta = -1;
+				}
+			} else if (effective === 'black') {
+				f.cards.black++;
+				s.forfeit = side;
+				s.remaining = 0;
+				s.startedAt = null;
+				s.finalExchange = false;
+				s.showWinner = true;
+			}
+			s.tagSwitch = null;
+			this.#logEvent(s, 'card', { side, card, effective, converted, reason, delta });
+			if (effective === 'red') this.#afterScoring(s);
+		}, { clock: card === 'black' });
+	}
+
+	/** Clears a fighter's cards, e.g. for a new event or a different fighter. */
+	clearCards(side) {
+		return this.apply(s => {
+			s.fighters[side].cards = noCards();
+		}, { undoable: false });
+	}
+
 	toggleShowWinner() {
 		return this.apply(s => {
 			if (s.finalExchange) return false;
@@ -583,6 +646,7 @@ export class Store {
 		s.simul = 0;
 		s.simulPenalties = [];
 		s.suddenDeath = false;
+		s.forfeit = null;
 		s.finalExchange = false;
 		s.tagSwitch = null;
 		s.tally = emptyTally();
@@ -754,6 +818,13 @@ export function describeEvent(s, e) {
 		if (taken[0] && taken[1]) return 'Simul (−1 both)';
 		if (taken[0] || taken[1]) return `Simul (−1 ${who(taken[0] ? 0 : 1)})`;
 		return 'Simul';
+	}
+	case 'card': {
+		const why = e.reason ? ` · ${e.reason}` : '';
+		if (e.converted) return `${who(e.side)} second yellow, red card${e.delta ? ' −1' : ''}${why}`;
+		const base = `${who(e.side)} ${e.card} card`;
+		if (e.card === 'black') return `${base}, forfeit${why}`;
+		return `${base}${e.delta ? ' −1' : ''}${why}`;
 	}
 	case 'time-up': return 'Time up';
 	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;

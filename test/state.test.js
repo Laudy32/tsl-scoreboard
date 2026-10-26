@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -587,4 +587,99 @@ test('unity: the votes read as a unanimous decision, a split decision or a draw'
 	assert.equal(decisionOf([1, 2]), 'split');
 	assert.equal(decisionOf([1, 1]), 'draw');
 	assert.equal(decisionOf([0, 0]), 'draw', 'every judge level');
+});
+
+test('cards: a yellow is a warning and a second yellow counts as a red', () => {
+	const { store, s } = setup();
+	store.addPoint(0); store.addPoint(0);
+	store.giveCard(0, 'yellow', 'Foot fault');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 1, red: 0, black: 0 });
+	assert.equal(s().fighters[0].score, 2, 'a yellow takes no points');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue yellow card · Foot fault');
+	store.giveCard(0, 'yellow');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 0, red: 1, black: 0 }, 'two yellows make a red');
+	assert.equal(s().fighters[0].score, 1);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue second yellow, red card −1');
+	store.undo();
+	assert.deepEqual(s().fighters[0].cards, { yellow: 1, red: 0, black: 0 });
+	assert.equal(s().fighters[0].score, 2);
+});
+
+test('cards: a red takes a point and can take the score below zero', () => {
+	const { store, s } = setup();
+	store.giveCard(1, 'red', 'Intentional ring out');
+	assert.equal(s().fighters[1].score, -1, 'a red at zero goes negative');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Red red card −1 · Intentional ring out');
+	assert.equal(store.addPoint(1, -1), false, 'normal scoring still stops at zero');
+	store.addPoint(1);
+	assert.equal(s().fighters[1].score, 0);
+	assert.equal(CARD_REASONS.includes('Intentional ring out'), true);
+	assert.equal(store.giveCard(0, 'purple'), false);
+});
+
+test('cards: no final exchange, but a red can flip a sudden death', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0);
+	store.start();
+	advance(D);
+	store.expire();
+	store.giveCard(0, 'yellow');
+	assert.equal(s().finalExchange, true, 'a card does not end the final exchange');
+	const sd = setup();
+	sd.store.addPoint(0); sd.store.addPoint(1);
+	sd.store.endRoundNow();
+	sd.store.nextRound();
+	sd.store.start();
+	sd.store.giveCard(0, 'red');
+	assert.equal(leader(sd.s()), 1, 'the red leaves Red ahead');
+	assert.equal(timeLeft(sd.s()), 0, 'which ends sudden death');
+});
+
+test('cards: a black card forfeits the bout to the other fighter', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(1);
+	store.start();
+	advance(10_000);
+	store.giveCard(0, 'black', 'Breach of conduct');
+	assert.equal(s().forfeit, 0);
+	assert.equal(leader(s()), 1, 'Red wins by forfeit although behind');
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(s().startedAt, null);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue black card, forfeit · Breach of conduct');
+	assert.equal(store.nextRoundAction(), 'next');
+	store.undo();
+	assert.equal(s().forfeit, null);
+	assert.equal(timeLeft(s(), store.now()) > 0, true, 'undo gives the clock back');
+	store.giveCard(0, 'black');
+	store.nextRound();
+	assert.equal(s().rounds[0].winner, 1);
+	assert.equal(s().forfeit, null, 'the next bout starts clean');
+	assert.equal(s().fighters[0].cards.black, 1, 'but the card stays on record');
+});
+
+test('cards: Unity records a red without a score, and cards follow fighters', () => {
+	const { store, s } = setup();
+	store.applyPreset('unity');
+	store.giveCard(0, 'red');
+	assert.equal(s().fighters[0].cards.red, 1);
+	assert.equal(s().fighters[0].score, 0);
+	store.swapSides();
+	assert.equal(s().fighters[1].cards.red, 1);
+	store.newMatch();
+	assert.equal(s().fighters[1].cards.red, 1, 'same fighters keep their cards');
+	assert.equal(hasCards(s().fighters[1]), true);
+	store.clearCards(1);
+	assert.equal(hasCards(s().fighters[1]), false);
+	store.giveCard(0, 'yellow');
+	store.newMatch({ full: true });
+	assert.equal(hasCards(s().fighters[0]), false, 'a full reset clears cards');
+});
+
+test('cards: saves from before cards existed still load', () => {
+	const old = initialState();
+	for (const f of old.fighters) delete f.cards;
+	delete old.forfeit;
+	const n = normalize(old);
+	assert.deepEqual(n.fighters[0].cards, { yellow: 0, red: 0, black: 0 });
+	assert.equal(n.forfeit, null);
 });

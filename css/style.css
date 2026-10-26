@@ -597,3 +597,17 @@ body[data-view=display] {
 	cursor: pointer;
 }
 .d-back:hover, .d-back:focus-visible { opacity: 1; }
+
+/* cards */
+.cards { display: flex; gap: 10px; justify-content: center; margin-top: 8px; }
+.card-btn { width: 30px; height: 42px; border-radius: 5px; border: 2px solid rgba(255,255,255,.35); cursor: pointer; padding: 0; }
+.card-btn.yellow, .card-chip.yellow { background: #f5c518; }
+.card-btn.red, .card-chip.red { background: #d62828; }
+.card-btn.black, .card-chip.black { background: #111; }
+.card-chips { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.card-chip { display: inline-block; min-width: 12px; height: 17px; border-radius: 3px; border: 1px solid rgba(255,255,255,.5); font-size: 11px; line-height: 15px; text-align: center; color: #fff; font-weight: 700; }
+.card-chip.yellow { color: #222; }
+.d-name .card-chip { min-width: 22px; height: 30px; font-size: 20px; line-height: 28px; }
+.card-panel { border: 2px solid var(--c); border-radius: 12px; padding: 12px; margin: 12px 0; display: grid; gap: 10px; }
+.card-panel h3 { margin: 0; font-size: 1rem; }
+.reasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
