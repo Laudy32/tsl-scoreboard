@@ -605,7 +605,8 @@ body[data-view=display] {
 .card-chip.red { background: #d62828; }
 .card-chip.black { background: #111; }
 .d-name .card-chip { min-width: 22px; height: 30px; font-size: 20px; line-height: 28px; }
-.penalty-btn.on { border-color: var(--gold, #d4a640); }
+.more { display: flex; justify-content: center; margin-top: 18px; }
+.more .btn.on { border-color: var(--gold, #d4a640); }
 .penalty-sheet { border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 12px; margin: 12px 0; display: grid; gap: 10px; }
 .penalty-sheet h3 { margin: 0; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; color: var(--gold, #d4a640); }
 .penalty-sheet .pills { display: flex; flex-wrap: wrap; gap: 8px; }

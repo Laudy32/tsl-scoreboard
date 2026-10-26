@@ -286,8 +286,6 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
-		<button class="btn wide penalty-btn${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button>
-		${cardPanel(s)}
 		${switchPanel(s)}
 		${tallyPanel(s)}
 		<div class="actions">
@@ -301,6 +299,8 @@ function renderControl(s) {
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button></div>
+		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
 			<table>
@@ -644,6 +644,7 @@ const actions = {
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };
 		render();
+		if (penalty) $('.penalty-sheet').scrollIntoView({ block: 'center' });
 	},
 	'penalty-pick': el => {
 		const { key, value } = el.dataset;
