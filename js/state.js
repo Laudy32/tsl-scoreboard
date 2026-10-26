@@ -18,11 +18,39 @@ export const DEFAULT_SETTINGS = {
 	simulCutoff: 3,
 	/** Round wins needed to win the match. 0 = no limit. */
 	playTo: 0,
+	/** Points that win the round on the spot. 0 = no limit, the clock decides. */
+	pointsToWin: 10,
+	/** Off for formats like Unity, where nobody keeps score during the bout. */
+	liveScore: true,
+	/** Shown above the scoreboard, e.g. "Masters". Empty = none. */
+	division: '',
+	/** Divisions typed in by the club, kept so they can be picked again. */
+	customDivisions: [],
 	pauseAfterScoring: false,
 	/** After time runs out, hide the winner until the judge reveals it. */
 	holdWinnerAtTimeUp: false,
 	sound: true,
 };
+
+/** Quick setups for the usual match types. Each sets only the rules it lists. */
+export const MATCH_PRESETS = [
+	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'unity', label: 'Unity', note: '1:00', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
+];
+
+/** Only Championship Series is fought over rounds (best of 3); every other division is one bout. */
+export const ROUNDS_DIVISION = 'Championship Series';
+export const CS_ROUNDS_TO_WIN = 2;
+
+export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
+
+export const DIVISIONS = ['Standard', 'Exotics', 'Unity', 'Tag Team', 'Redemption', 'Masters', "Women's", 'Championship Series'];
+
+/** The preset the current rules match, or null if they've been changed by hand. */
+export function activePreset(settings) {
+	return MATCH_PRESETS.find(p => Object.entries(p.settings).every(([k, v]) => settings[k] === v)) ?? null;
+}
 
 const UNDO_LIMIT = 100;
 
@@ -39,6 +67,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
+		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
+		stoppedAtTarget: null,
 		showWinner: !settings.holdWinnerAtTimeUp,
 		/** Time left as of the last start/pause. */
 		remaining: settings.duration,
@@ -59,7 +89,7 @@ export function normalize(saved) {
 	return {
 		...base,
 		...saved,
-		settings: { ...DEFAULT_SETTINGS, ...saved.settings },
+		settings: { ...DEFAULT_SETTINGS, ...saved.settings, customDivisions: [...(saved.settings?.customDivisions ?? [])] },
 		fighters: [0, 1].map(i => ({ ...base.fighters[i], ...saved.fighters?.[i] })),
 	};
 }
@@ -150,7 +180,13 @@ export class Store {
 		if (!entry.clock && sameRound && t > 0) {
 			prev.remaining = t;
 			prev.startedAt = running ? this.now() : null;
+		} else if (!entry.clock && sameRound && this.state.stoppedAtTarget !== null && prev.stoppedAtTarget === null) {
+			// Taking back the winning point: back to the time it was scored at, paused.
+			prev.remaining = this.state.stoppedAtTarget;
+			prev.startedAt = null;
 		}
+		// Settings changes aren't undoable, so undo never rolls them back.
+		prev.settings = this.state.settings;
 		this.state = prev;
 		this.emit();
 		return true;
@@ -223,6 +259,13 @@ export class Store {
 			s.remaining = 0;
 			s.startedAt = null;
 		}
+		const target = s.settings.pointsToWin;
+		if (target && timeLeft(s, this.now()) > 0 && s.fighters.some(f => f.score >= target)) {
+			s.stoppedAtTarget = timeLeft(s, this.now());
+			this.#logEvent(s, 'target-reached', { side: s.fighters.findIndex(f => f.score >= target) });
+			s.remaining = 0;
+			s.startedAt = null;
+		}
 		if (timeLeft(s, this.now()) === 0) s.showWinner = true;
 		if (s.settings.pauseAfterScoring && isRunning(s)) {
 			s.remaining = timeLeft(s, this.now());
@@ -232,6 +275,7 @@ export class Store {
 
 	addPoint(side, delta = 1) {
 		return this.apply(s => {
+			if (!s.settings.liveScore) return false;
 			// Scores never go below zero.
 			if (s.fighters[side].score + delta < 0) return false;
 			s.fighters[side].score += delta;
@@ -242,6 +286,7 @@ export class Store {
 
 	addSimul(delta = 1) {
 		return this.apply(s => {
+			if (!s.settings.liveScore) return false;
 			if (delta < 0 && s.simul === 0) return false;
 			const cutoff = s.settings.simulCutoff;
 			let taken;
@@ -276,6 +321,8 @@ export class Store {
 		const s = this.state;
 		if (timeLeft(s, this.now()) > 0) return null;
 		if (matchWinner(s) !== null) return null;
+		// Without a live score there's no winner or tiebreaker to decide here.
+		if (!s.settings.liveScore) return 'next';
 		return leader(s) !== null || s.suddenDeath ? 'next' : 'tiebreaker';
 	}
 
@@ -311,6 +358,7 @@ export class Store {
 		s.simul = 0;
 		s.simulPenalties = [];
 		s.suddenDeath = false;
+		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
 		s.startedAt = null;
 		s.showWinner = !s.settings.holdWinnerAtTimeUp;
@@ -377,6 +425,54 @@ export class Store {
 		}, { undoable: false });
 	}
 
+	applyPreset(id) {
+		const preset = MATCH_PRESETS.find(p => p.id === id);
+		if (!preset) return false;
+		return this.updateSettings(preset.settings);
+	}
+
+	/**
+	 * Picks the division. Championship Series is best of 3, so entering it
+	 * sets that up; leaving it clears it, unless it was changed by hand.
+	 */
+	#selectDivision(st, division) {
+		const was = st.division;
+		if (division === ROUNDS_DIVISION && was !== ROUNDS_DIVISION && !st.playTo) {
+			st.playTo = CS_ROUNDS_TO_WIN;
+		} else if (was === ROUNDS_DIVISION && division !== ROUNDS_DIVISION && st.playTo === CS_ROUNDS_TO_WIN) {
+			st.playTo = 0;
+		}
+		st.division = division;
+	}
+
+	setDivision(name) {
+		return this.apply(s => {
+			this.#selectDivision(s.settings, String(name ?? '').trim());
+		}, { undoable: false });
+	}
+
+	/** Adds a typed-in division to the saved list (once) and selects it. */
+	addCustomDivision(name) {
+		const clean = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+		if (!clean) return false;
+		return this.apply(s => {
+			const st = s.settings;
+			const same = d => d.toLowerCase() === clean.toLowerCase();
+			const existing = DIVISIONS.find(same) ?? st.customDivisions.find(same);
+			if (!existing) st.customDivisions = [...st.customDivisions, clean];
+			this.#selectDivision(st, existing ?? clean);
+		}, { undoable: false });
+	}
+
+	removeCustomDivision(name) {
+		return this.apply(s => {
+			const st = s.settings;
+			if (!st.customDivisions.includes(name)) return false;
+			st.customDivisions = st.customDivisions.filter(d => d !== name);
+			if (st.division === name) this.#selectDivision(st, '');
+		}, { undoable: false });
+	}
+
 	setRound(n) {
 		return this.apply(s => {
 			s.round = Math.max(1, Math.floor(n) || 1);
@@ -425,6 +521,7 @@ export function describeEvent(s, e) {
 		return 'Simul';
 	}
 	case 'time-up': return 'Time up';
+	case 'target-reached': return `${who(e.side)} reached ${e.scores[e.side]}`;
 	case 'round-ended': return 'Round ended early';
 	case 'tiebreaker': return 'Tiebreaker (sudden death)';
 	case 'round-won': return e.side === null ? 'Round over, no winner' : `Round won by ${who(e.side)}`;
