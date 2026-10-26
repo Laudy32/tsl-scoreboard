@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -221,6 +221,9 @@ test('presets load their rules and are recognized', () => {
 	assert.equal(s().remaining, 60_000);
 	assert.equal(activePreset(s().settings).id, 'unity');
 	store.updateSettings({ duration: 90_000 });
+	assert.equal(activePreset(s().settings).id, 'unity', '1:30 is one of the Unity lengths');
+	assert.equal(presetNote(activePreset(s().settings), s().settings), '1:30');
+	store.updateSettings({ duration: 75_000 });
 	assert.equal(activePreset(s().settings), null, 'edited rules no longer match a preset');
 	assert.equal(store.applyPreset('nope'), false);
 });
@@ -301,4 +304,382 @@ test('best of 3 ends after two round wins', () => {
 	store.addPoint(1); store.endRoundNow(); store.nextRound();
 	store.addPoint(0); store.endRoundNow(); store.nextRound();
 	assert.equal(matchWinner(s()), 0);
+});
+
+function runOut(store, advance) {
+	store.start();
+	advance(D);
+	store.expire();
+}
+
+test('time up calls a final exchange instead of a winner', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(0);
+	runOut(store, advance);
+	assert.equal(s().finalExchange, true);
+	assert.equal(s().showWinner, false);
+	assert.equal(store.nextRoundAction(), null, 'nothing moves on until the exchange resolves');
+	assert.equal(store.toggleShowWinner(), false);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Final exchange');
+	store.addPoint(1);
+	assert.equal(s().finalExchange, false, 'a point resolves it');
+	assert.equal(s().showWinner, true);
+	assert.equal(store.nextRoundAction(), 'next');
+	store.undo();
+	assert.equal(s().finalExchange, true, 'undo puts the exchange back');
+	assert.equal(s().fighters[1].score, 0);
+});
+
+test('one point apart, only a point ends the final exchange', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(1);
+	runOut(store, advance);
+	assert.equal(store.pointRequired(), true);
+	store.addSimul();
+	assert.equal(s().finalExchange, true, 'a simul at 2–1 does not end it');
+	store.addPoint(0, -1);
+	assert.equal(s().finalExchange, true, 'taking a point back does not end it');
+	store.undo();
+	store.addPoint(1);
+	assert.equal(s().finalExchange, false, 'the point is awarded');
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+});
+
+test('a simul or no call ends the final exchange when not one apart', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0);
+	runOut(store, advance);
+	assert.equal(store.pointRequired(), false);
+	store.addSimul();
+	assert.equal(s().finalExchange, false);
+	assert.equal(s().showWinner, true);
+	store.undo();
+	assert.equal(store.noCall(), true);
+	assert.equal(s().finalExchange, false);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'No call, bout over');
+	assert.equal(store.noCall(), false);
+});
+
+test('no final exchange in sudden death, without a live score, or when turned off', () => {
+	const sd = setup();
+	sd.store.addPoint(0); sd.store.addPoint(1);
+	sd.store.endRoundNow();
+	sd.store.nextRound();
+	sd.store.start();
+	sd.advance(30_000);
+	sd.store.expire();
+	assert.equal(sd.s().finalExchange, false);
+
+	const off = setup({ finalExchange: false });
+	runOut(off.store, off.advance);
+	assert.equal(off.s().finalExchange, false);
+	assert.equal(off.s().showWinner, true);
+
+	const unity = setup();
+	unity.store.applyPreset('unity');
+	unity.store.start();
+	unity.advance(60_000);
+	unity.store.expire();
+	assert.equal(unity.s().finalExchange, false);
+});
+
+test('turning final exchange off mid-exchange decides the bout', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0);
+	runOut(store, advance);
+	store.updateSettings({ finalExchange: false });
+	assert.equal(s().finalExchange, false);
+	assert.equal(s().showWinner, true);
+});
+
+test('tag team simuls call a switch instead of taking points', () => {
+	const { store, s } = setup({ simulCutoff: 1 });
+	store.setDivision('Tag Team');
+	store.addPoint(0); store.addPoint(0);
+	store.addSimul();
+	assert.deepEqual(s().fighters.map(f => f.score), [2, 0], 'no deduction');
+	assert.deepEqual(s().tagSwitch, { stayed: [false, false] });
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Simul (switch fighters)');
+	assert.equal(store.canStay(1), false, 'a team with no points must switch');
+	assert.equal(store.stay(1), false);
+	assert.equal(store.stay(0), true);
+	assert.equal(s().fighters[0].score, 1);
+	assert.equal(store.canStay(0), false, 'once per simul');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue took −1 to stay in');
+	store.undo();
+	assert.equal(s().fighters[0].score, 2);
+	store.switchDone();
+	assert.equal(s().tagSwitch, null);
+	store.addSimul();
+	store.start();
+	assert.equal(s().tagSwitch, null, 'restarting the fight clears the call');
+});
+
+test('tag team sudden death: a simul forces both switches', () => {
+	const { store, s } = setup();
+	store.setDivision('Tag Team');
+	store.addPoint(0); store.addPoint(1);
+	store.endRoundNow();
+	store.nextRound();
+	store.addSimul();
+	assert.ok(s().tagSwitch);
+	assert.equal(store.canStay(0), false);
+	assert.equal(store.canStay(1), false);
+});
+
+function unitySetup() {
+	const x = setup();
+	x.store.applyPreset('unity');
+	return x;
+}
+
+function enter(store, judge, left, right) {
+	store.setTally(judge, 0, left);
+	store.setTally(judge, 1, right);
+}
+
+test('unity: judges enter tallies privately, then publish to reveal the winner', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 7, 5);
+	assert.equal(store.publishTally(), false, 'one judge is not enough');
+	enter(store, 1, 6, 5);
+	assert.equal(store.tallyComplete(), true, 'two judges are enough');
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0], 'nothing shows before publishing');
+	enter(store, 2, 8, 6);
+	assert.deepEqual(tallyResult(s()), { reported: 3, averages: [7, 5.3], votes: [3, 0], scores: [7, 5] });
+	assert.equal(store.publishTally(), true);
+	assert.deepEqual(s().fighters.map(f => f.score), [7, 5], 'the rounded average is kept as the score');
+	assert.equal(leader(s()), 0);
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(store.setTally(0, 0, 1), false, 'locked once published');
+	store.undo();
+	assert.equal(s().tally.published, false, 'undo takes the publish back');
+	assert.equal(s().tally.judges[0][0], 7, 'tallies kept');
+});
+
+test('unity: the winner follows the judges\' votes, not the average', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 3, 2);
+	enter(store, 1, 4, 3);
+	enter(store, 2, 1, 40);
+	const r = tallyResult(s());
+	assert.equal(r.averages[1] > r.averages[0], true, 'one wild score puts Red ahead on average');
+	assert.deepEqual(r.votes, [2, 1]);
+	store.publishTally();
+	assert.equal(leader(s()), 0, 'two judges voted Blue');
+	assert.deepEqual(r.scores, [3, 2], 'averages 2.7 and 15 round to 3 and 15: the loser is recorded one below the winner');
+	assert.deepEqual(s().fighters.map(f => f.score), [3, 2]);
+	assert.equal(s().fighters[0].score > s().fighters[1].score, true);
+});
+
+test('recorded scores are whole numbers with the winner ahead', () => {
+	assert.deepEqual(recordScores([7, 5.3], 0), [7, 5]);
+	assert.deepEqual(recordScores([5.4, 5.4], 1), [4, 5], 'level after rounding: the loser goes one below');
+	assert.deepEqual(recordScores([5.6, 5.5], 0), [6, 5]);
+	assert.deepEqual(recordScores([4, 9.4], 0), [4, 3], 'a big gap the other way: loser one below the winner');
+	assert.deepEqual(recordScores([0.2, 0.4], 1), [0, 1], 'never below zero');
+	assert.deepEqual(recordScores([6.5, 5.5], null), [6, 6], 'a tie records level scores');
+});
+
+test('unity: a half-entered judge does not count, and a level judge casts no vote', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 5, 5);
+	store.setTally(1, 0, 9);
+	assert.equal(tallyResult(s()).reported, 1);
+	store.setTally(1, 1, 2);
+	assert.deepEqual(tallyResult(s()).votes, [1, 0]);
+});
+
+test('unity: tied or split votes go to an untimed sudden death, then the Marshal names the winner', () => {
+	const { store, s } = unitySetup();
+	assert.equal(s().settings.tiebreakerDuration, 0, 'Unity sudden death has no clock');
+	enter(store, 0, 6, 4);
+	enter(store, 1, 3, 5);
+	store.publishTally();
+	assert.deepEqual(s().tally.votes, [1, 1]);
+	assert.equal(leader(s()), null);
+	assert.equal(s().fighters[0].score, s().fighters[1].score, 'a tie records level scores');
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+	store.nextRound();
+	assert.equal(s().suddenDeath, true);
+	assert.equal(isUntimed(s()), true);
+	assert.equal(s().tally.published, true, 'the tally stays on record');
+	assert.equal(store.start(), false, 'there is no clock to start');
+	assert.equal(timeLeft(s()) > 0, true, 'the round stays open');
+	assert.equal(store.nextRoundAction(), null, 'nothing moves on until a winner is named');
+	assert.equal(store.setTieWinner(1), true);
+	assert.equal(leader(s()), 1);
+	assert.equal(s().fighters[1].score > s().fighters[0].score, true, 'the sudden-death winner is recorded ahead');
+	assert.equal(timeLeft(s()), 0, 'the Marshal\'s call ends sudden death');
+	assert.equal(isUntimed(s()), false, 'and the clock goes back to a reading');
+	assert.equal(store.nextRoundAction(), 'next');
+	store.nextRound();
+	assert.equal(s().rounds[0].winner, 1);
+	assert.equal(s().rounds[0].suddenDeath, true);
+	assert.equal(s().fighters[1].wins, 1);
+	assert.deepEqual(s().tally.judges[0], [null, null], 'tallies clear for the next match');
+	assert.equal(s().tally.tieWinner, null);
+});
+
+test('unity: three judges with a level one and no majority also go to sudden death', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 5, 3);
+	enter(store, 1, 4, 4);
+	enter(store, 2, 2, 6);
+	store.publishTally();
+	assert.deepEqual(s().tally.votes, [1, 1]);
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+});
+
+test('unity: untimed sudden death can be called off, and standard presets restore the 30s tiebreaker', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 5, 5);
+	enter(store, 1, 5, 5);
+	store.publishTally();
+	store.nextRound();
+	assert.equal(isUntimed(s()), true);
+	store.endRoundNow();
+	assert.equal(store.nextRoundAction(), 'next', 'ending it records no winner, with no second sudden death');
+	store.undo();
+	assert.equal(store.unpublishTally(), true);
+	assert.equal(s().suddenDeath, false, 'taking the result back calls off sudden death');
+	assert.equal(isUntimed(s()), false);
+	store.applyPreset('standard');
+	assert.equal(s().settings.tiebreakerDuration, 30_000);
+	assert.equal(isUntimed(s()), false);
+});
+
+test('unity: a decided result cannot be given a sudden-death winner, and can be taken back', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 6, 4);
+	enter(store, 1, 6, 4);
+	store.publishTally();
+	assert.equal(store.setTieWinner(1), false);
+	assert.equal(store.unpublishTally(), true);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+	enter(store, 1, 2, 4);
+	store.publishTally();
+	assert.equal(leader(s()), null, 'edited to 1–1');
+});
+
+test('unity: swap sides moves the tallies and votes with the fighters', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 5, 2);
+	enter(store, 1, 6, 1);
+	store.publishTally();
+	store.swapSides();
+	assert.deepEqual(s().tally.judges[0], [2, 5]);
+	assert.deepEqual(s().tally.votes, [0, 2]);
+	assert.equal(leader(s()), 1);
+});
+
+test('tally survives saves from before it existed', () => {
+	const old = initialState();
+	delete old.tally;
+	assert.deepEqual(normalize(old).tally.judges[0], [null, null]);
+});
+
+test('unity: the votes read as a unanimous decision, a split decision or a draw', () => {
+	assert.equal(decisionOf([3, 0]), 'unanimous');
+	assert.equal(decisionOf([0, 2]), 'unanimous');
+	assert.equal(decisionOf([2, 0]), 'unanimous', 'a level third judge casts no vote against');
+	assert.equal(decisionOf([2, 1]), 'split');
+	assert.equal(decisionOf([1, 2]), 'split');
+	assert.equal(decisionOf([1, 1]), 'draw');
+	assert.equal(decisionOf([0, 0]), 'draw', 'every judge level');
+});
+
+test('cards: a yellow is a warning and a second yellow counts as a red', () => {
+	const { store, s } = setup();
+	store.addPoint(0); store.addPoint(0);
+	store.giveCard(0, 'yellow', 'Foot fault');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 1, red: 0, black: 0 });
+	assert.equal(s().fighters[0].score, 2, 'a yellow takes no points');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue yellow card · Foot fault');
+	store.giveCard(0, 'yellow');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 0, red: 1, black: 0 }, 'two yellows make a red');
+	assert.equal(s().fighters[0].score, 1);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue second yellow, red card −1');
+	store.undo();
+	assert.deepEqual(s().fighters[0].cards, { yellow: 1, red: 0, black: 0 });
+	assert.equal(s().fighters[0].score, 2);
+});
+
+test('cards: a red takes a point and can take the score below zero', () => {
+	const { store, s } = setup();
+	store.giveCard(1, 'red', 'Intentional ring out');
+	assert.equal(s().fighters[1].score, -1, 'a red at zero goes negative');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Red red card −1 · Intentional ring out');
+	assert.equal(store.addPoint(1, -1), false, 'normal scoring still stops at zero');
+	store.addPoint(1);
+	assert.equal(s().fighters[1].score, 0);
+	assert.equal(CARD_REASONS.includes('Intentional ring out'), true);
+	assert.equal(store.giveCard(0, 'purple'), false);
+});
+
+test('cards: no final exchange, but a red can flip a sudden death', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0);
+	store.start();
+	advance(D);
+	store.expire();
+	store.giveCard(0, 'yellow');
+	assert.equal(s().finalExchange, true, 'a card does not end the final exchange');
+	const sd = setup();
+	sd.store.addPoint(0); sd.store.addPoint(1);
+	sd.store.endRoundNow();
+	sd.store.nextRound();
+	sd.store.start();
+	sd.store.giveCard(0, 'red');
+	assert.equal(leader(sd.s()), 1, 'the red leaves Red ahead');
+	assert.equal(timeLeft(sd.s()), 0, 'which ends sudden death');
+});
+
+test('cards: a black card forfeits the bout to the other fighter', () => {
+	const { store, s, advance } = setup();
+	store.addPoint(0); store.addPoint(0); store.addPoint(1);
+	store.start();
+	advance(10_000);
+	store.giveCard(0, 'black', 'Breach of conduct');
+	assert.equal(s().forfeit, 0);
+	assert.equal(leader(s()), 1, 'Red wins by forfeit although behind');
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(s().startedAt, null);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue black card, forfeit · Breach of conduct');
+	assert.equal(store.nextRoundAction(), 'next');
+	store.undo();
+	assert.equal(s().forfeit, null);
+	assert.equal(timeLeft(s(), store.now()) > 0, true, 'undo gives the clock back');
+	store.giveCard(0, 'black');
+	store.nextRound();
+	assert.equal(s().rounds[0].winner, 1);
+	assert.equal(s().forfeit, null, 'the next bout starts clean');
+	assert.equal(s().fighters[0].cards.black, 1, 'but the card stays on record');
+});
+
+test('cards: Unity records a red without a score, and cards follow fighters', () => {
+	const { store, s } = setup();
+	store.applyPreset('unity');
+	store.giveCard(0, 'red');
+	assert.equal(s().fighters[0].cards.red, 1);
+	assert.equal(s().fighters[0].score, 0);
+	store.swapSides();
+	assert.equal(s().fighters[1].cards.red, 1);
+	store.newMatch();
+	assert.equal(s().fighters[1].cards.red, 1, 'same fighters keep their cards');
+	assert.equal(hasCards(s().fighters[1]), true);
+	store.clearCards(1);
+	assert.equal(hasCards(s().fighters[1]), false);
+	store.giveCard(0, 'yellow');
+	store.newMatch({ full: true });
+	assert.equal(hasCards(s().fighters[0]), false, 'a full reset clears cards');
+});
+
+test('cards: saves from before cards existed still load', () => {
+	const old = initialState();
+	for (const f of old.fighters) delete f.cards;
+	delete old.forfeit;
+	const n = normalize(old);
+	assert.deepEqual(n.fighters[0].cards, { yellow: 0, red: 0, black: 0 });
+	assert.equal(n.forfeit, null);
 });

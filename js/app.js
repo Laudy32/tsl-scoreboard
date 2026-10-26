@@ -1,7 +1,8 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, usesRounds,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES,
+	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -66,19 +67,55 @@ function subtitle(f) {
 	return `<div class="subtitle">${f.subtitle.split('\n').map(esc).join('<br>')}</div>`;
 }
 
+// The open penalty sheet's choices, or null while it is closed.
+let penalty = null;
+
+/** Small card marks next to a fighter's name: Y, R2, B. */
+function cardChips(f) {
+	const c = f.cards;
+	const chip = (kind, n) => (n ? `<span class="card-chip ${kind}" title="${CARD_NAMES[kind]} card">${n > 1 ? n : ''}</span>` : '');
+	return hasCards(f) ? `<span class="card-chips">${chip('yellow', c.yellow)}${chip('red', c.red)}${chip('black', c.black)}</span>` : '';
+}
+
+function cardPanel(s) {
+	if (!penalty) return '';
+	const { side, card, reason } = penalty;
+	const pick = (key, value, label, extra = '', style = '') =>
+		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
+	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
+	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c]));
+	const reasons = CARD_REASONS.map(r => pick('reason', r, esc(r)));
+	return `<section class="penalty-sheet">
+		<h3>Penalty</h3>
+		<div class="pills">${fighters.join('')}</div>
+		<div class="pills">${cards.join('')}</div>
+		<div class="pills">${reasons.join('')}</div>
+		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card ? `Give ${card} card` : 'Give card'}</button></div>
+	</section>`;
+}
+
+const DECISION_LABELS = { unanimous: 'Unanimous decision', split: 'Split decision', draw: 'Draw' };
+
 /** The big line under the clock: winner, tie, time up, sudden death, paused. */
 function statusLine(s) {
 	const mw = matchWinner(s);
 	if (mw !== null) {
 		return `<span class="status win" style="--c:${hex(s.fighters[mw].color)}">Match won by <strong>${esc(fighterLabel(s, mw))}</strong></span>`;
 	}
+	if (s.finalExchange) return '<span class="status alert">Final exchange</span>';
 	if (timeLeft(s) === 0) {
-		if (!s.settings.liveScore) return '<span class="status alert">Time up</span>';
+		if (!s.settings.liveScore && !s.tally.published) return '<span class="status alert">Time up</span>';
 		if (!s.showWinner && !s.suddenDeath) return '<span class="status alert">Time up</span>';
 		const w = leader(s);
+		if (!s.settings.liveScore && w === null) return `<span class="status alert">${DECISION_LABELS.draw}</span>`;
 		if (w === null) return '<span class="status alert">Tie</span>';
-		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>`;
+		// A decision by the judges names its kind; a sudden-death winner is just listed.
+		const kind = !s.settings.liveScore && s.tally.tieWinner === null
+			? `<div class="status-sub">${DECISION_LABELS[decisionOf(s.tally.votes)]}</div>` : '';
+		const forfeit = s.forfeit !== null ? '<div class="status-sub">Forfeit</div>' : '';
+		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${forfeit || kind}`;
 	}
+	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
 	if (s.suddenDeath) return '<span class="status alert">Sudden death</span>';
 	if (!isRunning(s) && hasStarted(s)) return '<span class="status muted">Paused</span>';
 	return '<span class="status muted">&nbsp;</span>';
@@ -88,7 +125,7 @@ function statusLine(s) {
 function rulesLine(s) {
 	const st = s.settings;
 	const p = activePreset(st);
-	if (p) return `${p.label} · ${p.note}`;
+	if (p) return `${p.label} · ${presetNote(p, st)}`;
 	const parts = [formatClock(st.duration, { hundredths: false })];
 	if (st.liveScore && st.pointsToWin) parts.push(`first to ${st.pointsToWin}`);
 	return `Custom · ${parts.join(', ')}`;
@@ -102,6 +139,9 @@ function divisionHTML(s, cls) {
 /** What moving on is called: rounds only exist in Championship Series. */
 const nextLabel = s => (usesRounds(s) ? 'Next round' : 'Next match');
 
+/** The clock reading, or a label while sudden death is untimed. */
+const clockText = s => (isUntimed(s) ? 'Sudden death' : formatClock(timeLeft(s)));
+
 /** The display font's digits differ in width, so each gets a fixed-width cell to keep the clock still. */
 function clockHTML(text) {
 	return [...text].map(c => (/\d/.test(c) ? `<span class="dg">${c}</span>` : c)).join('');
@@ -111,13 +151,73 @@ function clockHTML(text) {
 
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
-		return '<button class="btn primary" data-action="next">${nextLabel(s)}</button>';
+		const sd = store.nextRoundAction() === 'tiebreaker';
+		return `<button class="btn primary" data-action="next">${sd ? `Sudden death${s.settings.tiebreakerDuration ? ` · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : ''}` : nextLabel(s)}</button>`;
 	}
+	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
 	if (isRunning(s)) return '<button class="btn primary pause" data-action="clock">Pause</button>';
-	return `<button class="btn primary go" data-action="clock">${hasStarted(s) ? 'Resume' : 'Start'}</button>`;
+	// Untimed sudden death has no clock to run: the Marshal's call is entered in the tally.
+	if (isUntimed(s)) return '';
+	// A fresh sudden death starts rather than resumes.
+	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
+	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
+}
+
+/** During the final exchange, the one thing the table can't guess: a one-point gap needs a point. */
+function finalExchangeNote() {
+	return store.pointRequired() ? '<p class="fe-note"><strong>Point required</strong></p>' : '';
+}
+
+/** Tag Team, after a simul: who switches and who paid to stay in. */
+function switchText(s) {
+	const stayed = s.tagSwitch.stayed;
+	if (!stayed[0] && !stayed[1]) return 'Switch fighters';
+	return [0, 1].map(i => `${esc(fighterLabel(s, i))} ${stayed[i] ? 'stays (−1)' : 'switches'}`).join(' · ');
+}
+
+function switchPanel(s) {
+	if (!s.tagSwitch) return '';
+	const stayButton = i => (s.tagSwitch.stayed[i]
+		? `<span class="stayed" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))} stays</span>`
+		: `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="stay" data-side="${i}" ${store.canStay(i) ? '' : 'disabled'}>${esc(fighterLabel(s, i))}: −1 to stay</button>`);
+	return `<div class="switch-call">
+		<div class="switch-title">${switchText(s)}</div>
+		<div class="row">${stayButton(0)}<button class="btn" data-action="switch-done">Switched</button>${stayButton(1)}</div>
+	</div>`;
+}
+
+/** Unity: line judges report their silent tallies here; nothing shows on the display until it's published. */
+function tallyPanel(s) {
+	if (s.settings.liveScore) return '';
+	const { reported, votes, scores } = tallyResult(s);
+	const locked = s.tally.published;
+	// Once published, the recorded scores are the fighters' own (a sudden-death winner can change them).
+	const shown = locked ? s.fighters.map(f => f.score) : scores;
+	const head = [0, 1].map(i => `<span class="tally-name" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))}</span>`).join('');
+	const rows = s.tally.judges.map((judge, j) => `<div class="tally-row"><span>Judge ${j + 1}${j >= MIN_JUDGES ? ' <small>(optional)</small>' : ''}</span>${[0, 1].map(i => {
+		const v = judge[i];
+		return `<input type="number" min="0" inputmode="numeric" data-tally="${j}-${i}" value="${v ?? ''}" ${locked ? 'disabled' : ''} aria-label="Judge ${j + 1}, ${esc(fighterLabel(s, i))}" />`;
+	}).join('')}</div>`).join('');
+	let foot;
+	if (!locked) {
+		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>`;
+	} else if (leader(s) === null) {
+		foot = `${s.suddenDeath ? `<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>` : ''}
+			<button class="btn" data-action="unpublish">Take back and edit</button>`;
+	} else {
+		foot = '<button class="btn" data-action="unpublish">Take back and edit</button>';
+	}
+	return `<section class="tally">
+		<h3>Judges' tally</h3>
+		<div class="tally-row tally-head"><span></span>${head}</div>
+		${rows}
+		<div class="tally-row tally-total"><span>Score</span><strong data-tally-total="0">${reported ? shown[0] : '–'}</strong><strong data-tally-total="1">${reported ? shown[1] : '–'}</strong></div>
+		<p class="fe-note" data-tally-votes>${reported ? `${DECISION_LABELS[decisionOf(votes)]} (${votes[0]}–${votes[1]})` : ''}</p>
+		${foot}
+	</section>`;
 }
 
 function fighterPanel(s, side) {
@@ -125,7 +225,7 @@ function fighterPanel(s, side) {
 	if (!s.settings.liveScore) {
 		return `<div class="fighter" style="--c:${hex(f.color)}">
 			<div class="score-btn no-score">
-				<span class="name">${esc(fighterLabel(s, side))}</span>
+				<span class="name">${esc(fighterLabel(s, side))}${cardChips(f)}</span>
 				${subtitle(f)}
 			</div>
 			${dots(s, side)}
@@ -134,7 +234,7 @@ function fighterPanel(s, side) {
 	const key = side === 0 ? ['Q', 'A'] : ['E', 'D'];
 	return `<div class="fighter" style="--c:${hex(f.color)}">
 		<button class="score-btn" data-action="point" data-side="${side}" aria-label="Add a point for ${esc(fighterLabel(s, side))}">
-			<span class="name">${esc(fighterLabel(s, side))}</span>
+			<span class="name">${esc(fighterLabel(s, side))}${cardChips(f)}</span>
 			${subtitle(f)}
 			<span class="score">${f.score}</span>
 			<span class="hint">tap +1 <kbd>${key[0]}</kbd></span>
@@ -168,8 +268,8 @@ function renderControl(s) {
 			${divisionHTML(s, 'division')}
 			<span class="rules">${esc(rulesLine(s))}</span>
 		</button>
-		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}" data-action="clock" aria-label="Start or pause the clock">
-			<span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span>
+		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}" data-action="clock" aria-label="Start or pause the clock">
+			<span data-clock>${clockHTML(clockText(s))}</span>
 		</button>
 		<div class="status-row">${statusLine(s)}</div>
 
@@ -179,15 +279,18 @@ function renderControl(s) {
 				<button class="score-btn" data-action="simul" aria-label="Add a simul">
 					<span class="name">Simul</span>
 					<span class="score">${s.simul}</span>
-					<span class="hint">${cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
+					<span class="hint">${isTagTeam(s) ? 'forces a switch' : cutoff ? `−1 both from #${cutoff}` : 'no penalty'} <kbd>W</kbd></span>
 				</button>
 				<button class="btn minus" data-action="simul" data-delta="-1" ${s.simul ? '' : 'disabled'}>−1 <kbd>S</kbd></button>
 			</div>` : '<div class="fighter vs"><span>vs</span></div>'}
 			${fighterPanel(s, 1)}
 		</div>
 
+		${switchPanel(s)}
+		${tallyPanel(s)}
 		<div class="actions">
 			${primaryButton(s)}
+			${s.finalExchange ? finalExchangeNote() : ''}
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
 				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>` : ''}
@@ -196,13 +299,15 @@ function renderControl(s) {
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button></div>
+		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
 			<table>
 				<tr><td><kbd>Q</kbd> / <kbd>A</kbd></td><td>+1 / −1 left fighter</td></tr>
 				<tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>+1 / −1 simul</td></tr>
 				<tr><td><kbd>E</kbd> / <kbd>D</kbd></td><td>+1 / −1 right fighter</td></tr>
-				<tr><td><kbd>Space</kbd></td><td>Start / pause (show winner after time up)</td></tr>
+				<tr><td><kbd>Space</kbd></td><td>Start / pause (show or hide the winner once the bout is decided)</td></tr>
 				<tr><td><kbd>N</kbd></td><td>Next round (next match outside Championship Series) or tiebreaker</td></tr>
 				<tr><td><kbd>Z</kbd></td><td>Undo</td></tr>
 				<tr><td><kbd>F</kbd></td><td>Open the spectator display</td></tr>
@@ -219,7 +324,7 @@ function renderDisplay(s) {
 	const side = i => {
 		const f = s.fighters[i];
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
-			<div class="d-name">${esc(fighterLabel(s, i))}</div>
+			<div class="d-name">${esc(fighterLabel(s, i))}${cardChips(f)}</div>
 			${subtitle(f)}
 			${live ? `<div class="d-score">${f.score}</div>` : ''}
 			${dots(s, i)}
@@ -229,14 +334,15 @@ function renderDisplay(s) {
 		<div class="d-top">
 			${divisionHTML(s, 'd-division')}
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
-			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
+			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
+			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
 			<div class="d-simul">
 				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
-				${live ? `<div class="d-label">Simul</div>
+				${s.settings.liveScore ? `<div class="d-label">Simul</div>
 				<div class="d-simul-n">${s.simul}</div>` : '<div class="d-label">vs</div>'}
 			</div>
 			${side(1)}
@@ -256,9 +362,14 @@ function colorOptions(selected) {
 function presetsHTML(st) {
 	const preset = activePreset(st);
 	const buttons = MATCH_PRESETS.map(p => `<button type="button" class="preset${preset?.id === p.id ? ' on' : ''}" data-action="preset" data-preset="${p.id}" aria-pressed="${preset?.id === p.id}">
-		<strong>${esc(p.label)}</strong><span>${esc(p.note)}</span>
+		<strong>${esc(p.label)}</strong><span>${esc(presetNote(p, st))}</span>
 	</button>`).join('');
+	// Unity offers a round length per format.
+	const lengths = preset?.durations ? `<p class="lengths-label">${esc(preset.label)} round length</p><div class="presets lengths" role="group" aria-label="${esc(preset.label)} round length">${preset.durations.map(d => `<button type="button" class="preset${st.duration === d.ms ? ' on' : ''}" data-action="duration" data-ms="${d.ms}" aria-pressed="${st.duration === d.ms}">
+			<strong>${esc(d.label)}</strong><span>${esc(d.note)}</span>
+		</button>`).join('')}</div>` : '';
 	return `<div class="presets">${buttons}</div>
+		${lengths}
 		${preset ? '' : '<p class="muted small-note">These rules have been changed by hand. Pick a match type to load its rules.</p>'}`;
 }
 
@@ -272,6 +383,7 @@ function renderSettings(s) {
 			<label>Name <input data-fighter="${side}" data-field="name" value="${esc(f.name)}" autocomplete="off" /></label>
 			<label>Subtitle <textarea data-fighter="${side}" data-field="subtitle" rows="2">${esc(f.subtitle)}</textarea></label>
 			<label>Color <select data-fighter="${side}" data-field="color">${colorOptions(f.color)}</select></label>
+			${hasCards(f) ? `<div class="row">${cardChips(f)}<button type="button" class="btn small" data-action="clear-cards" data-side="${side}">Clear cards</button></div>` : ''}
 			${rounds ? `<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>` : ''}
 		</fieldset>`;
 	};
@@ -318,14 +430,14 @@ function renderSettings(s) {
 			<h3>Rules</h3>
 			<div class="two-col">
 				<label>${rounds ? 'Round length' : 'Match length'} <input data-setting="duration" data-kind="clock" value="${formatClock(st.duration, { hundredths: false })}" inputmode="decimal" /></label>
-				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
+				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" aria-describedby="tb-hint" /><small id="tb-hint" class="muted">0:00 = untimed</small></label>
 				<label>${rounds ? 'Points to win the round' : 'Points to win'} <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
 				${rounds ? `<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>` : ''}
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
 			</div>
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
-			<label class="check"><input type="checkbox" data-setting="holdWinnerAtTimeUp" ${st.holdWinnerAtTimeUp ? 'checked' : ''} /> At time up, wait for last points before showing the winner</label>
+			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
 			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time up</label>
 		</section>
 
@@ -367,8 +479,24 @@ const app = $('#app');
 const settingsDialog = $('#settings');
 const historyDialog = $('#history');
 
+// A judge's number is committed on change; rebuilding the page then would
+// drop focus from the next field, so just refresh the totals and Publish.
+let tallyEditing = false;
+function refreshTally(s) {
+	const { reported, votes, scores } = tallyResult(s);
+	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? scores[+el.dataset.tallyTotal] : '–';
+	const note = $('[data-tally-votes]');
+	if (note) note.textContent = reported ? `${DECISION_LABELS[decisionOf(votes)]} (${votes[0]}–${votes[1]})` : '';
+	const publish = $('[data-action="publish"]');
+	if (publish) publish.disabled = !store.tallyComplete();
+}
+
 function render() {
 	const s = store.state;
+	if (tallyEditing) {
+		refreshTally(s);
+		return;
+	}
 	app.innerHTML = view === 'display' ? renderDisplay(s) : renderControl(s);
 	document.documentElement.style.setProperty('--left', hex(s.fighters[0].color));
 	document.documentElement.style.setProperty('--right', hex(s.fighters[1].color));
@@ -384,7 +512,7 @@ let wasRunning = isRunning(store.state);
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
-	const text = formatClock(left);
+	const text = clockText(s);
 	for (const el of document.querySelectorAll('[data-clock]')) {
 		if (el.dataset.text !== text) {
 			el.dataset.text = text;
@@ -513,9 +641,47 @@ function exportCSV() {
 
 const actions = {
 	clock: () => store.toggleClock(),
+	penalty: () => {
+		penalty = penalty ? null : { side: null, card: null, reason: null };
+		render();
+		if (penalty) $('.penalty-sheet').scrollIntoView({ block: 'center' });
+	},
+	'penalty-pick': el => {
+		const { key, value } = el.dataset;
+		const v = key === 'side' ? +value : value;
+		penalty[key] = penalty[key] === v ? null : v;
+		render();
+	},
+	'penalty-close': () => {
+		penalty = null;
+		render();
+	},
+	'penalty-give': async () => {
+		const { side, card, reason } = penalty;
+		if (card === 'black' && !await confirmAction(`Black card for ${fighterLabel(store.state, side)}? The bout is forfeited and the clock stops. You can undo this.`, 'Black card')) return;
+		penalty = null;
+		if (!store.giveCard(side, card, reason)) render();
+	},
+	'clear-cards': el => {
+		store.clearCards(+el.dataset.side);
+		refreshSettings();
+	},
 	point: el => store.addPoint(+el.dataset.side, +(el.dataset.delta || 1)),
 	simul: el => store.addSimul(+(el.dataset.delta || 1)),
 	winner: () => store.toggleShowWinner(),
+	'no-call': async () => {
+		if (store.pointRequired() && !await confirmAction('The scores are one point apart, so the rules say a point must be awarded. End the bout with no point anyway?', 'End with no point')) return;
+		store.noCall();
+	},
+	publish: () => store.publishTally(),
+	unpublish: () => store.unpublishTally(),
+	'tie-winner': el => store.setTieWinner(+el.dataset.side),
+	stay: el => store.stay(+el.dataset.side),
+	'switch-done': () => store.switchDone(),
+	duration: el => {
+		store.updateSettings({ duration: +el.dataset.ms });
+		refreshSettings();
+	},
 	undo: () => store.undo(),
 	next: () => store.nextRound(),
 	end: async () => {
@@ -594,6 +760,19 @@ document.addEventListener('contextmenu', e => {
 	else if (el.dataset.action === 'simul') store.addSimul(-1);
 });
 
+// Judges' tallies: committed per field without redrawing the page.
+app.addEventListener('change', e => {
+	const el = e.target.closest('[data-tally]');
+	if (!el) return;
+	const [judge, side] = el.dataset.tally.split('-').map(Number);
+	tallyEditing = true;
+	try {
+		store.setTally(judge, side, el.value === '' ? null : parseInt(el.value, 10));
+	} finally {
+		tallyEditing = false;
+	}
+});
+
 // Settings fields apply as soon as they change.
 settingsDialog.addEventListener('input', e => {
 	const el = e.target;
@@ -620,7 +799,7 @@ settingsDialog.addEventListener('change', e => {
 		else if (el.dataset.kind === 'int') value = Math.max(0, parseInt(el.value, 10) || 0);
 		else if (el.dataset.kind === 'clock') {
 			value = parseClock(el.value);
-			if (!value) {
+			if (value === null || (!value && key !== 'tiebreakerDuration')) {
 				el.setCustomValidity('Use minutes:seconds, like 3:00');
 				el.reportValidity();
 				return;

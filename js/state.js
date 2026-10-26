@@ -13,6 +13,7 @@ export const COLORS = {
 
 export const DEFAULT_SETTINGS = {
 	duration: 2.5 * 60 * 1000,
+	/** Sudden death length. 0 = untimed: the Marshal decides it (Unity, Rules 9.12a). */
 	tiebreakerDuration: 30 * 1000,
 	/** Each simul at or past this count takes 1 point from both fighters. 0 = never. */
 	simulCutoff: 3,
@@ -27,16 +28,28 @@ export const DEFAULT_SETTINGS = {
 	/** Divisions typed in by the club, kept so they can be picked again. */
 	customDivisions: [],
 	pauseAfterScoring: false,
-	/** After time runs out, hide the winner until the judge reveals it. */
-	holdWinnerAtTimeUp: false,
+	/**
+	 * At 0:00 the table calls a Final Exchange: fighting goes on until the
+	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
+	 */
+	finalExchange: true,
 	sound: true,
 };
 
 /** Quick setups for the usual match types. Each sets only the rules it lists. */
 export const MATCH_PRESETS = [
-	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'unity', label: 'Unity', note: '1:00', settings: { duration: 60_000, pointsToWin: 0, liveScore: false } },
+	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
+	{
+		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
+		settings: { duration: 60_000, tiebreakerDuration: 0, pointsToWin: 0, liveScore: false },
+		// Unity round lengths by format (Rules 9.02). Any of them still counts as this preset.
+		durations: [
+			{ ms: 60_000, label: '1:00', note: 'Pools' },
+			{ ms: 90_000, label: '1:30', note: 'Single elim, CS' },
+			{ ms: 120_000, label: '2:00', note: 'CS only' },
+		],
+	},
 ];
 
 /** Only Championship Series is fought over rounds (best of 3); every other division is one bout. */
@@ -45,17 +58,89 @@ export const CS_ROUNDS_TO_WIN = 2;
 
 export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
 
+/** In Tag Team a simul makes both teams switch fighters instead of costing points (Rules 8.04). */
+export const TAG_TEAM_DIVISION = 'Tag Team';
+export const isTagTeam = s => s.settings.division === TAG_TEAM_DIVISION;
+
 export const DIVISIONS = ['Standard', 'Exotics', 'Unity', 'Tag Team', 'Redemption', 'Masters', "Women's", 'Championship Series'];
 
 /** The preset the current rules match, or null if they've been changed by hand. */
 export function activePreset(settings) {
-	return MATCH_PRESETS.find(p => Object.entries(p.settings).every(([k, v]) => settings[k] === v)) ?? null;
+	return MATCH_PRESETS.find(p => Object.entries(p.settings).every(([k, v]) =>
+		settings[k] === v || (k === 'duration' && p.durations?.some(d => d.ms === settings.duration)))) ?? null;
+}
+
+/** A preset's summary for the current rules, e.g. "1:30" once a Unity length is picked. */
+export function presetNote(p, settings) {
+	const d = activePreset(settings) === p && p.durations?.find(x => x.ms === settings.duration);
+	return d ? d.label : p.note;
 }
 
 const UNDO_LIMIT = 100;
 
+function emptyTally() {
+	return { judges: [[null, null], [null, null], [null, null]], published: false, votes: [0, 0], averages: [0, 0], tieWinner: null };
+}
+
+/** At least this many line judges must report before a Unity result can be published. */
+export const MIN_JUDGES = 2;
+
+/** How the judges' votes came out: no votes against, some against, or level. */
+export function decisionOf([a, b]) {
+	if (a === b) return 'draw';
+	return Math.min(a, b) === 0 ? 'unanimous' : 'split';
+}
+
+/**
+ * The whole-number scores to record (and enter in Challonge): the averages
+ * rounded, but never leaving the winner level with or behind the loser. If
+ * rounding doesn't separate them, the loser is recorded one below the winner.
+ * With no winner (a tie) both get the same score.
+ */
+export function recordScores(averages, winner) {
+	const scores = averages.map(a => Math.round(a));
+	if (winner === null) {
+		const level = Math.round((averages[0] + averages[1]) / 2);
+		return [level, level];
+	}
+	if (scores[winner] <= scores[1 - winner]) {
+		// A big gap between the average and the votes: the loser goes one below the winner.
+		scores[winner] = Math.max(scores[winner], 1);
+		scores[1 - winner] = scores[winner] - 1;
+	}
+	return scores;
+}
+
+/**
+ * What the judges reported. Each judge who gave both scores casts a vote for
+ * the fighter they scored higher (none if level); the winner comes from the
+ * votes, so one judge with wildly different numbers can't swing it. The
+ * averages are for the record.
+ */
+export function tallyResult(s) {
+	const done = s.tally.judges.filter(j => j.every(v => v !== null));
+	const avg = i => (done.length ? Math.round(done.reduce((sum, j) => sum + j[i], 0) / done.length * 10) / 10 : 0);
+	const votes = [0, 1].map(i => done.filter(j => j[i] > j[1 - i]).length);
+	const averages = [avg(0), avg(1)];
+	return {
+		reported: done.length,
+		averages,
+		votes,
+		scores: recordScores(averages, votes[0] === votes[1] ? null : votes[0] > votes[1] ? 0 : 1),
+	};
+}
+
+/** Why a card was given, from the conduct rules (3.03, 3.04, 4.03, 5.07-7, 5.11-5). */
+export const CARD_REASONS = ['Breach of conduct', 'Intentional ring out', 'Foot fault', 'Excessive force', 'Cornerstone', 'Other'];
+
+export const CARD_NAMES = { yellow: 'Yellow', red: 'Red', black: 'Black' };
+
+const noCards = () => ({ yellow: 0, red: 0, black: 0 });
+
+export const hasCards = f => f.cards.yellow + f.cards.red + f.cards.black > 0;
+
 function fighter(color) {
-	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0 };
+	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0, cards: noCards() };
 }
 
 export function initialState(settings = DEFAULT_SETTINGS) {
@@ -67,9 +152,17 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
+		/** Side that took a black card and forfeits the bout, or null. */
+		forfeit: null,
+		/** Time is up but the last exchange is still being fought. */
+		finalExchange: false,
+		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
+		tally: emptyTally(),
+		/** Tag Team, after a simul: which teams paid a point to keep their fighter in. Null when no switch is due. */
+		tagSwitch: null,
 		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
 		stoppedAtTarget: null,
-		showWinner: !settings.holdWinnerAtTimeUp,
+		showWinner: true,
 		/** Time left as of the last start/pause. */
 		remaining: settings.duration,
 		/** Epoch ms of the last start/resume, or null while paused. */
@@ -100,6 +193,12 @@ export function timeLeft(s, now = Date.now()) {
 }
 
 export const isRunning = s => s.startedAt !== null;
+
+/** Sudden death with no clock: it ends when the Marshal names a winner. */
+export const isUntimed = s => s.suddenDeath && s.settings.tiebreakerDuration === 0 && s.remaining > 0;
+
+/** Stands in for the clock reading while sudden death is untimed. */
+const UNTIMED_REMAINING = 1;
 export const isTimeUp = (s, now) => timeLeft(s, now) === 0;
 export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.duration ||
 	s.fighters.some(f => f.score) || s.simul > 0;
@@ -107,6 +206,14 @@ export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.durati
 /** Index of the fighter ahead on points, or null on a tie. */
 export function leader(s) {
 	const [a, b] = s.fighters;
+	// A black card forfeits the bout to the other fighter.
+	if (s.forfeit !== null && s.forfeit !== undefined) return 1 - s.forfeit;
+	// A published Unity result is decided by the judges' votes, not the averages.
+	if (s.tally?.published) {
+		const [x, y] = s.tally.votes;
+		if (x !== y) return x > y ? 0 : 1;
+		return s.tally.tieWinner ?? null;
+	}
 	if (a.score === b.score) return null;
 	return a.score > b.score ? 0 : 1;
 }
@@ -196,8 +303,10 @@ export class Store {
 
 	start() {
 		return this.apply(s => {
-			if (isRunning(s) || timeLeft(s) === 0) return false;
+			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s)) return false;
 			s.startedAt = this.now();
+			// Fighting again means any fighter switch has been made.
+			s.tagSwitch = null;
 		}, { undoable: false });
 	}
 
@@ -219,8 +328,34 @@ export class Store {
 			if (!isRunning(s) || timeLeft(s, this.now()) > 0) return false;
 			s.remaining = 0;
 			s.startedAt = null;
-			this.#logEvent(s, 'time-up');
+			if (s.settings.finalExchange && s.settings.liveScore && !s.suddenDeath) {
+				s.finalExchange = true;
+				s.showWinner = false;
+				this.#logEvent(s, 'final-exchange');
+			} else {
+				this.#logEvent(s, 'time-up');
+			}
 		}, { undoable: false });
+	}
+
+	/** True while a final exchange can't end without a point: the scores are one apart (Rules 5.13-2b). */
+	pointRequired() {
+		const [a, b] = this.state.fighters;
+		return this.state.finalExchange && Math.abs(a.score - b.score) === 1;
+	}
+
+	/** The final exchange ends with no point ("No call", or no attempt to score). */
+	noCall() {
+		return this.apply(s => {
+			if (!s.finalExchange) return false;
+			this.#endFinalExchange(s);
+			this.#logEvent(s, 'no-call');
+		});
+	}
+
+	#endFinalExchange(s) {
+		s.finalExchange = false;
+		s.showWinner = true;
 	}
 
 	setTime(ms) {
@@ -266,7 +401,7 @@ export class Store {
 			s.remaining = 0;
 			s.startedAt = null;
 		}
-		if (timeLeft(s, this.now()) === 0) s.showWinner = true;
+		if (timeLeft(s, this.now()) === 0 && !s.finalExchange) s.showWinner = true;
 		if (s.settings.pauseAfterScoring && isRunning(s)) {
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
@@ -279,6 +414,9 @@ export class Store {
 			// Scores never go below zero.
 			if (s.fighters[side].score + delta < 0) return false;
 			s.fighters[side].score += delta;
+			s.tagSwitch = null;
+			// An awarded point always resolves the final exchange; taking one back doesn't.
+			if (s.finalExchange && delta > 0) this.#endFinalExchange(s);
 			this.#logEvent(s, 'point', { side, delta });
 			this.#afterScoring(s);
 		});
@@ -291,25 +429,170 @@ export class Store {
 			const cutoff = s.settings.simulCutoff;
 			let taken;
 			if (delta > 0) {
+				// A simul ends the final exchange, unless the scores are one
+				// apart: then only a point can (Rules 5.13-2b).
+				if (s.finalExchange && !this.pointRequired()) this.#endFinalExchange(s);
 				// The penalty applies from the cutoff-th simul on (1-based), and
 				// only while both fighters have a point to lose. If either is at
-				// zero, nobody loses one.
-				const penalized = cutoff && s.simul + 1 >= cutoff && s.fighters.every(f => f.score > 0);
+				// zero, nobody loses one. Tag Team switches fighters instead.
+				const tag = isTagTeam(s);
+				const penalized = !tag && cutoff && s.simul + 1 >= cutoff && s.fighters.every(f => f.score > 0);
 				taken = s.fighters.map(() => (penalized ? 1 : 0));
 				s.simulPenalties.push(taken);
 				s.fighters.forEach((f, i) => { f.score -= taken[i]; });
+				s.tagSwitch = tag ? { stayed: [false, false] } : null;
 			} else {
 				taken = s.simulPenalties.pop() ?? [0, 0];
 				s.fighters.forEach((f, i) => { f.score += taken[i]; });
 			}
 			s.simul += delta;
-			this.#logEvent(s, 'simul', { delta, taken });
+			this.#logEvent(s, 'simul', { delta, taken, ...(delta > 0 && isTagTeam(s) ? { tag: true } : {}) });
 			this.#afterScoring(s);
 		});
 	}
 
+	/** Can this team pay a point to keep its fighter in? Not with no points, and never in sudden death (Rules 8.04, 8.05). */
+	canStay(side) {
+		const s = this.state;
+		return !!s.tagSwitch && !s.tagSwitch.stayed[side] && !s.suddenDeath && s.fighters[side].score > 0;
+	}
+
+	/** Tag Team: this team takes −1 to skip the switch the simul called for. */
+	stay(side) {
+		if (!this.canStay(side)) return false;
+		return this.apply(s => {
+			s.fighters[side].score -= 1;
+			s.tagSwitch.stayed[side] = true;
+			this.#logEvent(s, 'stay', { side });
+		});
+	}
+
+	/** The fighters have switched; clear the call from the screens. */
+	switchDone() {
+		return this.apply(s => {
+			if (!s.tagSwitch) return false;
+			s.tagSwitch = null;
+		}, { undoable: false });
+	}
+
+	// --- judges' tally (no live score) ---
+
+	setTally(judge, side, value) {
+		return this.apply(s => {
+			if (s.tally.published) return false;
+			const n = Math.floor(value);
+			s.tally.judges[judge][side] = value === null || Number.isNaN(n) ? null : Math.max(0, n);
+		}, { undoable: false });
+	}
+
+	/** Enough judges have reported both scores to publish. */
+	tallyComplete() {
+		return tallyResult(this.state).reported >= MIN_JUDGES;
+	}
+
+	/** Reveals the averages and the winner on every screen. */
+	publishTally() {
+		if (!this.tallyComplete() || this.state.tally.published) return false;
+		return this.apply(s => {
+			const { averages, votes, scores } = tallyResult(s);
+			s.fighters.forEach((f, i) => { f.score = scores[i]; });
+			s.tally.votes = votes;
+			s.tally.averages = averages;
+			s.tally.published = true;
+			s.showWinner = true;
+			// Judges report once the round is over, so publishing closes the clock.
+			s.remaining = 0;
+			s.startedAt = null;
+			this.#logEvent(s, 'tally-published', { votes });
+		}, { clock: true });
+	}
+
+	/** Takes a published result back so the tallies can be corrected. */
+	unpublishTally() {
+		return this.apply(s => {
+			if (!s.tally.published) return false;
+			s.fighters.forEach(f => { f.score = 0; });
+			s.tally.published = false;
+			if (s.suddenDeath) {
+				// Taking the result back also calls off its sudden death.
+				s.suddenDeath = false;
+				s.remaining = 0;
+				s.startedAt = null;
+			}
+			s.tally.votes = [0, 0];
+			s.tally.averages = [0, 0];
+			s.tally.tieWinner = null;
+			this.#logEvent(s, 'tally-unpublished');
+		}, { clock: true });
+	}
+
+	/** After a tied tally, the Marshal's sudden death names the winner (Rules 9.12a-2). */
+	setTieWinner(side) {
+		return this.apply(s => {
+			if (!s.tally.published || s.tally.votes[0] !== s.tally.votes[1]) return false;
+			s.tally.tieWinner = side;
+			// The sudden-death winner gets the higher recorded score.
+			recordScores(s.tally.averages, side).forEach((v, i) => { s.fighters[i].score = v; });
+			// The Marshal's call ends sudden death.
+			s.remaining = 0;
+			s.startedAt = null;
+			this.#logEvent(s, 'tie-broken', { side });
+		}, { clock: true });
+	}
+
+	// --- cards (Rules 3.04) ---
+
+	/**
+	 * Gives a card. Yellow is a warning, and a second yellow counts as a red.
+	 * Red takes a point, and may take the score below zero. Black forfeits the bout.
+	 */
+	giveCard(side, card, reason = null) {
+		if (!(card in CARD_NAMES)) return false;
+		return this.apply(s => {
+			const f = s.fighters[side];
+			let effective = card;
+			let converted = false;
+			if (card === 'yellow') {
+				if (f.cards.yellow >= 1) {
+					f.cards.yellow = 0;
+					effective = 'red';
+					converted = true;
+				} else {
+					f.cards.yellow = 1;
+				}
+			}
+			let delta = 0;
+			if (effective === 'red') {
+				f.cards.red++;
+				// Unity keeps no live score here; the card is just recorded.
+				if (s.settings.liveScore) {
+					f.score -= 1;
+					delta = -1;
+				}
+			} else if (effective === 'black') {
+				f.cards.black++;
+				s.forfeit = side;
+				s.remaining = 0;
+				s.startedAt = null;
+				s.finalExchange = false;
+				s.showWinner = true;
+			}
+			s.tagSwitch = null;
+			this.#logEvent(s, 'card', { side, card, effective, converted, reason, delta });
+			if (effective === 'red') this.#afterScoring(s);
+		}, { clock: card === 'black' });
+	}
+
+	/** Clears a fighter's cards, e.g. for a new event or a different fighter. */
+	clearCards(side) {
+		return this.apply(s => {
+			s.fighters[side].cards = noCards();
+		}, { undoable: false });
+	}
+
 	toggleShowWinner() {
 		return this.apply(s => {
+			if (s.finalExchange) return false;
 			s.showWinner = !s.showWinner;
 		}, { undoable: false });
 	}
@@ -320,9 +603,13 @@ export class Store {
 	nextRoundAction() {
 		const s = this.state;
 		if (timeLeft(s, this.now()) > 0) return null;
+		if (s.finalExchange) return null;
 		if (matchWinner(s) !== null) return null;
-		// Without a live score there's no winner or tiebreaker to decide here.
-		if (!s.settings.liveScore) return 'next';
+		if (!s.settings.liveScore) {
+			// Unity: tied or split judge votes go to sudden death, once.
+			const tied = s.tally.published && s.tally.votes[0] === s.tally.votes[1] && s.tally.tieWinner === null;
+			return tied && !s.suddenDeath ? 'tiebreaker' : 'next';
+		}
 		return leader(s) !== null || s.suddenDeath ? 'next' : 'tiebreaker';
 	}
 
@@ -332,7 +619,8 @@ export class Store {
 		return this.apply(s => {
 			if (action === 'tiebreaker') {
 				s.suddenDeath = true;
-				s.remaining = s.settings.tiebreakerDuration;
+				// An untimed sudden death keeps a token sliver on the clock so the round isn't "over" until a winner is named.
+				s.remaining = s.settings.tiebreakerDuration || UNTIMED_REMAINING;
 				s.startedAt = null;
 				this.#logEvent(s, 'tiebreaker');
 				return;
@@ -358,10 +646,14 @@ export class Store {
 		s.simul = 0;
 		s.simulPenalties = [];
 		s.suddenDeath = false;
+		s.forfeit = null;
+		s.finalExchange = false;
+		s.tagSwitch = null;
+		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
 		s.startedAt = null;
-		s.showWinner = !s.settings.holdWinnerAtTimeUp;
+		s.showWinner = true;
 	}
 
 	resetRound() {
@@ -386,6 +678,10 @@ export class Store {
 		return this.apply(s => {
 			s.fighters.reverse();
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
+			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
+			s.tally.votes = [...s.tally.votes].reverse();
+			s.tally.averages = [...s.tally.averages].reverse();
+			if (s.tally.tieWinner !== null) s.tally.tieWinner = 1 - s.tally.tieWinner;
 			for (const e of s.log) {
 				e.scores = [...e.scores].reverse();
 				if (typeof e.side === 'number') e.side = 1 - e.side;
@@ -419,8 +715,10 @@ export class Store {
 				!s.fighters.some(f => f.score) && s.simul === 0) {
 				s.remaining = s.settings.duration;
 			}
-			if ('holdWinnerAtTimeUp' in changes && timeLeft(s, this.now()) > 0) {
-				s.showWinner = !changes.holdWinnerAtTimeUp;
+			// Turning Final Exchange off mid-exchange decides the bout now.
+			if (changes.finalExchange === false && s.finalExchange) {
+				s.finalExchange = false;
+				s.showWinner = true;
 			}
 		}, { undoable: false });
 	}
@@ -515,12 +813,26 @@ export function describeEvent(s, e) {
 	case 'point': return `${e.delta > 0 ? '+1' : '−1'} ${who(e.side)}`;
 	case 'simul': {
 		if (e.delta < 0) return 'Simul removed';
+		if (e.tag) return 'Simul (switch fighters)';
 		const taken = e.taken ?? (e.penalty ? [1, 1] : [0, 0]);
 		if (taken[0] && taken[1]) return 'Simul (−1 both)';
 		if (taken[0] || taken[1]) return `Simul (−1 ${who(taken[0] ? 0 : 1)})`;
 		return 'Simul';
 	}
+	case 'card': {
+		const why = e.reason ? ` · ${e.reason}` : '';
+		if (e.converted) return `${who(e.side)} second yellow, red card${e.delta ? ' −1' : ''}${why}`;
+		const base = `${who(e.side)} ${e.card} card`;
+		if (e.card === 'black') return `${base}, forfeit${why}`;
+		return `${base}${e.delta ? ' −1' : ''}${why}`;
+	}
 	case 'time-up': return 'Time up';
+	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
+	case 'tally-unpublished': return 'Tally taken back';
+	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
+	case 'final-exchange': return 'Final exchange';
+	case 'no-call': return 'No call, bout over';
+	case 'stay': return `${who(e.side)} took −1 to stay in`;
 	case 'target-reached': return `${who(e.side)} reached ${e.scores[e.side]}`;
 	case 'round-ended': return 'Round ended early';
 	case 'tiebreaker': return 'Tiebreaker (sudden death)';
