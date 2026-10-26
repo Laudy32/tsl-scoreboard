@@ -83,7 +83,7 @@ function cardPanel(s) {
 	const pick = (key, value, label, extra = '', style = '') =>
 		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
 	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
-	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c], c === 'red' && s.settings.liveScore ? ' · −1' : ''));
+	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c]));
 	const reasons = CARD_REASONS.map(r => pick('reason', r, esc(r)));
 	return `<section class="penalty-sheet">
 		<h3>Penalty</h3>
