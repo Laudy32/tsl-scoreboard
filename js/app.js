@@ -67,8 +67,8 @@ function subtitle(f) {
 	return `<div class="subtitle">${f.subtitle.split('\n').map(esc).join('<br>')}</div>`;
 }
 
-// The card waiting for a reason, or null.
-let pendingCard = null;
+// The open penalty sheet's choices, or null while it is closed.
+let penalty = null;
 
 /** Small card marks next to a fighter's name: Y, R2, B. */
 function cardChips(f) {
@@ -77,18 +77,20 @@ function cardChips(f) {
 	return hasCards(f) ? `<span class="card-chips">${chip('yellow', c.yellow)}${chip('red', c.red)}${chip('black', c.black)}</span>` : '';
 }
 
-function cardButtons(s, side) {
-	return `<div class="cards" role="group" aria-label="Cards for ${esc(fighterLabel(s, side))}">${['yellow', 'red', 'black'].map(card =>
-		`<button class="card-btn ${card}" data-action="card" data-side="${side}" data-card="${card}" aria-label="${CARD_NAMES[card]} card for ${esc(fighterLabel(s, side))}"></button>`).join('')}</div>`;
-}
-
 function cardPanel(s) {
-	if (!pendingCard) return '';
-	const { side, card } = pendingCard;
-	return `<section class="card-panel" style="--c:${hex(s.fighters[side].color)}">
-		<h3>${CARD_NAMES[card]} card · ${esc(fighterLabel(s, side))}</h3>
-		<div class="reasons">${CARD_REASONS.map(r => `<button class="btn" data-action="card-reason" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
-		<div class="row"><button class="btn" data-action="card-reason">No reason</button><button class="btn" data-action="card-cancel">Cancel</button></div>
+	if (!penalty) return '';
+	const { side, card, reason } = penalty;
+	const pick = (key, value, label, extra = '', style = '') =>
+		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
+	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
+	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c], c === 'red' && s.settings.liveScore ? ' · −1' : ''));
+	const reasons = CARD_REASONS.map(r => pick('reason', r, esc(r)));
+	return `<section class="penalty-sheet">
+		<h3>Penalty</h3>
+		<div class="pills">${fighters.join('')}</div>
+		<div class="pills">${cards.join('')}</div>
+		<div class="pills">${reasons.join('')}</div>
+		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card ? `Give ${card} card` : 'Give card'}</button></div>
 	</section>`;
 }
 
@@ -227,7 +229,6 @@ function fighterPanel(s, side) {
 				${subtitle(f)}
 			</div>
 			${dots(s, side)}
-			${cardButtons(s, side)}
 		</div>`;
 	}
 	const key = side === 0 ? ['Q', 'A'] : ['E', 'D'];
@@ -240,7 +241,6 @@ function fighterPanel(s, side) {
 		</button>
 		${dots(s, side)}
 		<button class="btn minus" data-action="point" data-side="${side}" data-delta="-1" ${f.score > 0 ? '' : 'disabled'}>−1 <kbd>${key[1]}</kbd></button>
-		${cardButtons(s, side)}
 	</div>`;
 }
 
@@ -286,8 +286,9 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
-		${switchPanel(s)}
+		<button class="btn wide penalty-btn${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button>
 		${cardPanel(s)}
+		${switchPanel(s)}
 		${tallyPanel(s)}
 		<div class="actions">
 			${primaryButton(s)}
@@ -640,21 +641,25 @@ function exportCSV() {
 
 const actions = {
 	clock: () => store.toggleClock(),
-	card: async el => {
-		const side = +el.dataset.side, card = el.dataset.card;
+	penalty: () => {
+		penalty = penalty ? null : { side: null, card: null, reason: null };
+		render();
+	},
+	'penalty-pick': el => {
+		const { key, value } = el.dataset;
+		const v = key === 'side' ? +value : value;
+		penalty[key] = penalty[key] === v ? null : v;
+		render();
+	},
+	'penalty-close': () => {
+		penalty = null;
+		render();
+	},
+	'penalty-give': async () => {
+		const { side, card, reason } = penalty;
 		if (card === 'black' && !await confirmAction(`Black card for ${fighterLabel(store.state, side)}? The bout is forfeited and the clock stops. You can undo this.`, 'Black card')) return;
-		pendingCard = { side, card };
-		render();
-	},
-	'card-reason': el => {
-		if (!pendingCard) return;
-		const { side, card } = pendingCard;
-		pendingCard = null;
-		if (!store.giveCard(side, card, el.dataset.reason || null)) render();
-	},
-	'card-cancel': () => {
-		pendingCard = null;
-		render();
+		penalty = null;
+		if (!store.giveCard(side, card, reason)) render();
 	},
 	'clear-cards': el => {
 		store.clearCards(+el.dataset.side);

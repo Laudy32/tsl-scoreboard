@@ -29,8 +29,8 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   is the score to record (e.g. in Challonge); if rounding doesn't put the
   winner ahead, the loser is recorded one point below. Tied or split votes go
   to an untimed sudden death, and the Marshal's winner is entered at the table
-- Yellow, red and black cards under each fighter, with a reason (intentional
-  ring out is one of them). Two yellows make a red. A red takes a point and is
+- A Penalty button opens a sheet: pick the fighter, the card and a reason
+  (intentional ring out is one of them), then give it. Two yellows make a red. A red takes a point and is
   the only thing that can take a score below zero. A black card forfeits the
   bout. Cards show beside the name and are cleared in Settings
 - Round wins shown as dots, with an optional "rounds to win the match"
