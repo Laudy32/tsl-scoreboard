@@ -80,7 +80,7 @@ function statusLine(s) {
 		if (w === null) return '<span class="status alert">Tie</span>';
 		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>`;
 	}
-	if (isUntimed(s)) return '<span class="status alert">No clock · the Marshal decides</span>';
+	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
 	if (s.suddenDeath) return '<span class="status alert">Sudden death</span>';
 	if (!isRunning(s) && hasStarted(s)) return '<span class="status muted">Paused</span>';
 	return '<span class="status muted">&nbsp;</span>';
@@ -124,18 +124,16 @@ function primaryButton(s) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
 	if (isRunning(s)) return '<button class="btn primary pause" data-action="clock">Pause</button>';
-	// Untimed sudden death has no clock to run: the Marshal's call is entered below.
-	if (isUntimed(s)) return '<button class="btn primary" disabled>Sudden death</button>';
+	// Untimed sudden death has no clock to run: the Marshal's call is entered in the tally.
+	if (isUntimed(s)) return '';
 	// A fresh sudden death starts rather than resumes.
 	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
 	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
 }
 
-/** What the table does during the final exchange. */
+/** During the final exchange, the one thing the table can't guess: a one-point gap needs a point. */
 function finalExchangeNote() {
-	return store.pointRequired()
-		? '<p class="fe-note"><strong>One point apart:</strong> a point must be awarded. A simul or no call doesn\'t end the bout.</p>'
-		: '<p class="fe-note">Score the last exchange with a point or Simul, or end it with No call. Ring outs don\'t count.</p>';
+	return store.pointRequired() ? '<p class="fe-note"><strong>Point required</strong></p>' : '';
 }
 
 /** Tag Team, after a simul: who switches and who paid to stay in. */
@@ -153,7 +151,6 @@ function switchPanel(s) {
 	return `<div class="switch-call">
 		<div class="switch-title">${switchText(s)}</div>
 		<div class="row">${stayButton(0)}<button class="btn" data-action="switch-done">Switched</button>${stayButton(1)}</div>
-		<p class="fe-note">${s.suddenDeath ? 'Sudden death: both teams must switch.' : 'A team with no points must switch.'}</p>
 	</div>`;
 }
 
@@ -169,17 +166,11 @@ function tallyPanel(s) {
 		const v = judge[i];
 		return `<input type="number" min="0" inputmode="numeric" data-tally="${j}-${i}" value="${v ?? ''}" ${locked ? 'disabled' : ''} aria-label="Judge ${j + 1}, ${esc(fighterLabel(s, i))}" />`;
 	}).join('')}</div>`).join('');
-	const voteText = `Judge votes: ${votes[0]}–${votes[1]}`;
 	let foot;
 	if (!locked) {
-		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>
-			<p class="fe-note">Needs at least ${MIN_JUDGES} judges. Hidden on the display until you publish.</p>`;
+		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>`;
 	} else if (leader(s) === null) {
-		const length = s.settings.tiebreakerDuration ? `${formatClock(s.settings.tiebreakerDuration, { hundredths: false })} sudden death` : 'untimed sudden death';
-		foot = `<p class="fe-note"><strong>Tied votes.</strong> ${s.suddenDeath
-			? 'The Marshal decides sudden death. Who won it?'
-			: `Tied or split votes go to an ${length}. Use the button below to start it.`}</p>
-			${s.suddenDeath ? `<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>` : ''}
+		foot = `${s.suddenDeath ? `<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>` : ''}
 			<button class="btn" data-action="unpublish">Take back and edit</button>`;
 	} else {
 		foot = '<button class="btn" data-action="unpublish">Take back and edit</button>';
@@ -189,7 +180,7 @@ function tallyPanel(s) {
 		<div class="tally-row tally-head"><span></span>${head}</div>
 		${rows}
 		<div class="tally-row tally-total"><span>Score</span><strong data-tally-total="0">${reported ? shown[0] : '–'}</strong><strong data-tally-total="1">${reported ? shown[1] : '–'}</strong></div>
-		<p class="fe-note" data-tally-votes>${reported ? `${voteText}. The score is the judges' average, rounded so the winner is ahead.` : 'Each judge counts as a vote for the winner.'}</p>
+		<p class="fe-note" data-tally-votes>${reported ? `Votes ${votes[0]}–${votes[1]}` : ''}</p>
 		${foot}
 	</section>`;
 }
@@ -458,7 +449,7 @@ function refreshTally(s) {
 	const { reported, votes, scores } = tallyResult(s);
 	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? scores[+el.dataset.tallyTotal] : '–';
 	const note = $('[data-tally-votes]');
-	if (note) note.textContent = reported ? `Judge votes: ${votes[0]}–${votes[1]}. The score is the judges' average, rounded so the winner is ahead.` : 'Each judge counts as a vote for the winner.';
+	if (note) note.textContent = reported ? `Votes ${votes[0]}–${votes[1]}` : '';
 	const publish = $('[data-action="publish"]');
 	if (publish) publish.disabled = !store.tallyComplete();
 }
