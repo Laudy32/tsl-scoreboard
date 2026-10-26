@@ -37,11 +37,11 @@ export const DEFAULT_SETTINGS = {
 
 /** Quick setups for the usual match types. Each sets only the rules it lists. */
 export const MATCH_PRESETS = [
-	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
 	{
 		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
-		settings: { duration: 60_000, pointsToWin: 0, liveScore: false },
+		settings: { duration: 60_000, tiebreakerDuration: 60_000, pointsToWin: 0, liveScore: false },
 		// Unity round lengths by format (Rules 9.02). Any of them still counts as this preset.
 		durations: [
 			{ ms: 60_000, label: '1:00', note: 'Pools' },
@@ -86,7 +86,8 @@ export const MIN_JUDGES = 2;
 
 /**
  * The whole-number scores to record (and enter in Challonge): the averages
- * rounded, but never leaving the winner level with or behind the loser.
+ * rounded, but never leaving the winner level with or behind the loser. If
+ * rounding doesn't separate them, the loser is recorded one below the winner.
  * With no winner (a tie) both get the same score.
  */
 export function recordScores(averages, winner) {
@@ -95,7 +96,11 @@ export function recordScores(averages, winner) {
 		const level = Math.round((averages[0] + averages[1]) / 2);
 		return [level, level];
 	}
-	if (scores[winner] <= scores[1 - winner]) scores[winner] = scores[1 - winner] + 1;
+	if (scores[winner] <= scores[1 - winner]) {
+		// A big gap between the average and the votes: the loser goes one below the winner.
+		scores[winner] = Math.max(scores[winner], 1);
+		scores[1 - winner] = scores[winner] - 1;
+	}
 	return scores;
 }
 
@@ -496,8 +501,11 @@ export class Store {
 			s.tally.tieWinner = side;
 			// The sudden-death winner gets the higher recorded score.
 			recordScores(s.tally.averages, side).forEach((v, i) => { s.fighters[i].score = v; });
+			// The Marshal's call ends sudden death.
+			s.remaining = 0;
+			s.startedAt = null;
 			this.#logEvent(s, 'tie-broken', { side });
-		});
+		}, { clock: true });
 	}
 
 	toggleShowWinner() {
@@ -515,8 +523,11 @@ export class Store {
 		if (timeLeft(s, this.now()) > 0) return null;
 		if (s.finalExchange) return null;
 		if (matchWinner(s) !== null) return null;
-		// Without a live score there's no winner or tiebreaker to decide here.
-		if (!s.settings.liveScore) return 'next';
+		if (!s.settings.liveScore) {
+			// Unity: tied or split judge votes go to sudden death, once.
+			const tied = s.tally.published && s.tally.votes[0] === s.tally.votes[1] && s.tally.tieWinner === null;
+			return tied && !s.suddenDeath ? 'tiebreaker' : 'next';
+		}
 		return leader(s) !== null || s.suddenDeath ? 'next' : 'tiebreaker';
 	}
 

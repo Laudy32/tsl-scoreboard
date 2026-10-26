@@ -26,8 +26,9 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Unity judges' tally: 2 or 3 line judges report to the table. Each judge is a
   vote for the winner and the display shows the votes (2–0 or 2–1) once you
   press Publish. The judges' average, rounded so the winner is always ahead,
-  is the score to record (e.g. in Challonge). A tied vote can be
-  recorded (pools) or settled by the Marshal's sudden death
+  is the score to record (e.g. in Challonge); if rounding doesn't put the
+  winner ahead, the loser is recorded one point below. Tied or split votes go
+  to a 60-second sudden death, and the Marshal's winner is entered at the table
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV

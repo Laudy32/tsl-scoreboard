@@ -467,16 +467,17 @@ test('unity: the winner follows the judges\' votes, not the average', () => {
 	assert.deepEqual(r.votes, [2, 1]);
 	store.publishTally();
 	assert.equal(leader(s()), 0, 'two judges voted Blue');
-	assert.deepEqual(r.scores, [16, 15], 'averages 2.7 and 15 round to 3 and 15, but the winner is recorded ahead');
-	assert.deepEqual(s().fighters.map(f => f.score), [16, 15]);
+	assert.deepEqual(r.scores, [3, 2], 'averages 2.7 and 15 round to 3 and 15: the loser is recorded one below the winner');
+	assert.deepEqual(s().fighters.map(f => f.score), [3, 2]);
 	assert.equal(s().fighters[0].score > s().fighters[1].score, true);
 });
 
 test('recorded scores are whole numbers with the winner ahead', () => {
 	assert.deepEqual(recordScores([7, 5.3], 0), [7, 5]);
-	assert.deepEqual(recordScores([5.4, 5.4], 1), [5, 6], 'level after rounding: the vote winner goes up one');
-	assert.deepEqual(recordScores([5.6, 5.5], 0), [7, 6], 'both round to 6: the winner goes up one');
-	assert.deepEqual(recordScores([4, 9.4], 0), [10, 9]);
+	assert.deepEqual(recordScores([5.4, 5.4], 1), [4, 5], 'level after rounding: the loser goes one below');
+	assert.deepEqual(recordScores([5.6, 5.5], 0), [6, 5]);
+	assert.deepEqual(recordScores([4, 9.4], 0), [4, 3], 'a big gap the other way: loser one below the winner');
+	assert.deepEqual(recordScores([0.2, 0.4], 1), [0, 1], 'never below zero');
 	assert.deepEqual(recordScores([6.5, 5.5], null), [6, 6], 'a tie records level scores');
 });
 
@@ -489,23 +490,57 @@ test('unity: a half-entered judge does not count, and a level judge casts no vot
 	assert.deepEqual(tallyResult(s()).votes, [1, 0]);
 });
 
-test('unity: tied votes are a tie in pools, or the Marshal names a sudden-death winner', () => {
-	const { store, s } = unitySetup();
+test('unity: tied or split votes go to a 60 second sudden death, then the Marshal names the winner', () => {
+	const { store, s, advance } = unitySetup();
+	assert.equal(s().settings.tiebreakerDuration, 60_000);
 	enter(store, 0, 6, 4);
 	enter(store, 1, 3, 5);
 	store.publishTally();
 	assert.deepEqual(s().tally.votes, [1, 1]);
 	assert.equal(leader(s()), null);
 	assert.equal(s().fighters[0].score, s().fighters[1].score, 'a tie records level scores');
-	assert.equal(store.nextRoundAction(), 'next', 'pools can end in a tie');
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+	store.nextRound();
+	assert.equal(s().suddenDeath, true);
+	assert.equal(s().remaining, 60_000);
+	assert.equal(s().tally.published, true, 'the tally stays on record');
+	store.start();
+	advance(20_000);
 	assert.equal(store.setTieWinner(1), true);
 	assert.equal(leader(s()), 1);
 	assert.equal(s().fighters[1].score > s().fighters[0].score, true, 'the sudden-death winner is recorded ahead');
+	assert.equal(timeLeft(s()), 0, 'the Marshal\'s call ends sudden death');
+	assert.equal(store.nextRoundAction(), 'next');
 	store.nextRound();
 	assert.equal(s().rounds[0].winner, 1);
+	assert.equal(s().rounds[0].suddenDeath, true);
 	assert.equal(s().fighters[1].wins, 1);
 	assert.deepEqual(s().tally.judges[0], [null, null], 'tallies clear for the next match');
 	assert.equal(s().tally.tieWinner, null);
+});
+
+test('unity: three judges with a level one and no majority also go to sudden death', () => {
+	const { store, s } = unitySetup();
+	enter(store, 0, 5, 3);
+	enter(store, 1, 4, 4);
+	enter(store, 2, 2, 6);
+	store.publishTally();
+	assert.deepEqual(s().tally.votes, [1, 1]);
+	assert.equal(store.nextRoundAction(), 'tiebreaker');
+});
+
+test('unity: sudden death with no winner named still moves on, and standard presets restore 30s', () => {
+	const { store, s, advance } = unitySetup();
+	enter(store, 0, 5, 5);
+	enter(store, 1, 5, 5);
+	store.publishTally();
+	store.nextRound();
+	store.start();
+	advance(60_000);
+	store.expire();
+	assert.equal(store.nextRoundAction(), 'next', 'no second sudden death');
+	store.applyPreset('standard');
+	assert.equal(s().settings.tiebreakerDuration, 30_000);
 });
 
 test('unity: a decided result cannot be given a sudden-death winner, and can be taken back', () => {

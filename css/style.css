@@ -131,6 +131,7 @@ kbd {
 	padding: 3px 6px;
 	vertical-align: 0.35em;
 }
+@media (max-width: 480px) { .round-pill .sd-tag { display: block; width: fit-content; margin-top: 4px; } }
 .bar-actions { display: flex; gap: 6px; }
 .bar .btn { background: transparent; border-color: #353943; }
 .bar .btn:hover { border-color: var(--gold); color: var(--gold); background: transparent; }

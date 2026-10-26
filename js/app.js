@@ -112,14 +112,17 @@ function clockHTML(text) {
 
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
-		return `<button class="btn primary" data-action="next">${nextLabel(s)}</button>`;
+		const sd = store.nextRoundAction() === 'tiebreaker';
+		return `<button class="btn primary" data-action="next">${sd ? `Sudden death · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : nextLabel(s)}</button>`;
 	}
 	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
 	if (isRunning(s)) return '<button class="btn primary pause" data-action="clock">Pause</button>';
-	return `<button class="btn primary go" data-action="clock">${hasStarted(s) ? 'Resume' : 'Start'}</button>`;
+	// A fresh sudden death starts rather than resumes.
+	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
+	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
 }
 
 /** What the table does during the final exchange. */
@@ -166,8 +169,11 @@ function tallyPanel(s) {
 		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>
 			<p class="fe-note">Needs at least ${MIN_JUDGES} judges. Hidden on the display until you publish.</p>`;
 	} else if (leader(s) === null) {
-		foot = `<p class="fe-note"><strong>Tied.</strong> A pool match can end in a tie. In single elimination the Marshal runs sudden death: who won it?</p>
-			<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>
+		const duration = formatClock(s.settings.tiebreakerDuration, { hundredths: false });
+		foot = `<p class="fe-note"><strong>Tied votes.</strong> ${s.suddenDeath
+			? 'The Marshal decides sudden death. Who won it?'
+			: `Tied or split votes go to a ${duration} sudden death. Use the button below to start it.`}</p>
+			${s.suddenDeath ? `<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>` : ''}
 			<button class="btn" data-action="unpublish">Take back and edit</button>`;
 	} else {
 		foot = '<button class="btn" data-action="unpublish">Take back and edit</button>';
