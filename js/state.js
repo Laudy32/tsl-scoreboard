@@ -13,6 +13,7 @@ export const COLORS = {
 
 export const DEFAULT_SETTINGS = {
 	duration: 2.5 * 60 * 1000,
+	/** Sudden death length. 0 = untimed: the Marshal decides it (Unity, Rules 9.12a). */
 	tiebreakerDuration: 30 * 1000,
 	/** Each simul at or past this count takes 1 point from both fighters. 0 = never. */
 	simulCutoff: 3,
@@ -41,7 +42,7 @@ export const MATCH_PRESETS = [
 	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
 	{
 		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
-		settings: { duration: 60_000, tiebreakerDuration: 60_000, pointsToWin: 0, liveScore: false },
+		settings: { duration: 60_000, tiebreakerDuration: 0, pointsToWin: 0, liveScore: false },
 		// Unity round lengths by format (Rules 9.02). Any of them still counts as this preset.
 		durations: [
 			{ ms: 60_000, label: '1:00', note: 'Pools' },
@@ -175,6 +176,12 @@ export function timeLeft(s, now = Date.now()) {
 }
 
 export const isRunning = s => s.startedAt !== null;
+
+/** Sudden death with no clock: it ends when the Marshal names a winner. */
+export const isUntimed = s => s.suddenDeath && s.settings.tiebreakerDuration === 0;
+
+/** Stands in for the clock reading while sudden death is untimed. */
+const UNTIMED_REMAINING = 1;
 export const isTimeUp = (s, now) => timeLeft(s, now) === 0;
 export const hasStarted = s => isRunning(s) || s.remaining !== s.settings.duration ||
 	s.fighters.some(f => f.score) || s.simul > 0;
@@ -277,7 +284,7 @@ export class Store {
 
 	start() {
 		return this.apply(s => {
-			if (isRunning(s) || timeLeft(s) === 0) return false;
+			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s)) return false;
 			s.startedAt = this.now();
 			// Fighting again means any fighter switch has been made.
 			s.tagSwitch = null;
@@ -487,6 +494,12 @@ export class Store {
 			if (!s.tally.published) return false;
 			s.fighters.forEach(f => { f.score = 0; });
 			s.tally.published = false;
+			if (s.suddenDeath) {
+				// Taking the result back also calls off its sudden death.
+				s.suddenDeath = false;
+				s.remaining = 0;
+				s.startedAt = null;
+			}
 			s.tally.votes = [0, 0];
 			s.tally.averages = [0, 0];
 			s.tally.tieWinner = null;
@@ -537,7 +550,8 @@ export class Store {
 		return this.apply(s => {
 			if (action === 'tiebreaker') {
 				s.suddenDeath = true;
-				s.remaining = s.settings.tiebreakerDuration;
+				// An untimed sudden death keeps a token sliver on the clock so the round isn't "over" until a winner is named.
+				s.remaining = s.settings.tiebreakerDuration || UNTIMED_REMAINING;
 				s.startedAt = null;
 				this.#logEvent(s, 'tiebreaker');
 				return;

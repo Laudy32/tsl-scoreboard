@@ -196,6 +196,7 @@ kbd {
 .clock small { font-size: 0.5em; color: var(--muted); }
 .clock.running { border-color: var(--go); box-shadow: inset 0 2px 12px rgba(0,0,0,.6), 0 0 0 1px var(--go), 0 0 28px -6px var(--go); }
 .clock.up { color: var(--danger); border-color: var(--danger); }
+.clock.untimed { font-size: clamp(40px, 12vw, 80px); padding: 22px 0 18px; color: var(--danger); border-color: var(--danger); text-transform: uppercase; }
 .status-row { text-align: center; min-height: 30px; margin-top: -4px; }
 .status { font: 800 26px/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .status.muted { color: var(--muted); font-size: 18px; letter-spacing: 0.2em; }
@@ -526,6 +527,7 @@ body[data-view=display] {
 	color: #fff;
 }
 .d-clock.up { color: var(--danger); }
+.d-clock.untimed { font-size: min(14vh, 11vw); text-transform: uppercase; color: var(--danger); }
 .d-status { min-height: 7vh; }
 .d-switch { display: inline-block; margin-top: 1vh; padding: 0.6vh 2.5vw; border-radius: 1vh; background: var(--gold); color: #16120a; font: 900 5vh/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .d-status .status { font-size: 6vh; }

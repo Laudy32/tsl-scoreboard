@@ -28,7 +28,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   press Publish. The judges' average, rounded so the winner is always ahead,
   is the score to record (e.g. in Challonge); if rounding doesn't put the
   winner ahead, the loser is recorded one point below. Tied or split votes go
-  to a 60-second sudden death, and the Marshal's winner is entered at the table
+  to an untimed sudden death, and the Marshal's winner is entered at the table
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV

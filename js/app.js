@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, tallyResult, MIN_JUDGES,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, MIN_JUDGES,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -80,6 +80,7 @@ function statusLine(s) {
 		if (w === null) return '<span class="status alert">Tie</span>';
 		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>`;
 	}
+	if (isUntimed(s)) return '<span class="status alert">No clock · the Marshal decides</span>';
 	if (s.suddenDeath) return '<span class="status alert">Sudden death</span>';
 	if (!isRunning(s) && hasStarted(s)) return '<span class="status muted">Paused</span>';
 	return '<span class="status muted">&nbsp;</span>';
@@ -103,6 +104,9 @@ function divisionHTML(s, cls) {
 /** What moving on is called: rounds only exist in Championship Series. */
 const nextLabel = s => (usesRounds(s) ? 'Next round' : 'Next match');
 
+/** The clock reading, or a label while sudden death is untimed. */
+const clockText = s => (isUntimed(s) ? 'Sudden death' : formatClock(timeLeft(s)));
+
 /** The display font's digits differ in width, so each gets a fixed-width cell to keep the clock still. */
 function clockHTML(text) {
 	return [...text].map(c => (/\d/.test(c) ? `<span class="dg">${c}</span>` : c)).join('');
@@ -113,13 +117,15 @@ function clockHTML(text) {
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
 		const sd = store.nextRoundAction() === 'tiebreaker';
-		return `<button class="btn primary" data-action="next">${sd ? `Sudden death · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : nextLabel(s)}</button>`;
+		return `<button class="btn primary" data-action="next">${sd ? `Sudden death${s.settings.tiebreakerDuration ? ` · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : ''}` : nextLabel(s)}</button>`;
 	}
 	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
 	if (isRunning(s)) return '<button class="btn primary pause" data-action="clock">Pause</button>';
+	// Untimed sudden death has no clock to run: the Marshal's call is entered below.
+	if (isUntimed(s)) return '<button class="btn primary" disabled>Sudden death</button>';
 	// A fresh sudden death starts rather than resumes.
 	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
 	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
@@ -169,10 +175,10 @@ function tallyPanel(s) {
 		foot = `<button class="btn primary" data-action="publish" ${store.tallyComplete() ? '' : 'disabled'}>Publish winner</button>
 			<p class="fe-note">Needs at least ${MIN_JUDGES} judges. Hidden on the display until you publish.</p>`;
 	} else if (leader(s) === null) {
-		const duration = formatClock(s.settings.tiebreakerDuration, { hundredths: false });
+		const length = s.settings.tiebreakerDuration ? `${formatClock(s.settings.tiebreakerDuration, { hundredths: false })} sudden death` : 'untimed sudden death';
 		foot = `<p class="fe-note"><strong>Tied votes.</strong> ${s.suddenDeath
 			? 'The Marshal decides sudden death. Who won it?'
-			: `Tied or split votes go to a ${duration} sudden death. Use the button below to start it.`}</p>
+			: `Tied or split votes go to an ${length}. Use the button below to start it.`}</p>
 			${s.suddenDeath ? `<div class="row">${[0, 1].map(i => `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="tie-winner" data-side="${i}">${esc(fighterLabel(s, i))} won</button>`).join('')}</div>` : ''}
 			<button class="btn" data-action="unpublish">Take back and edit</button>`;
 	} else {
@@ -236,8 +242,8 @@ function renderControl(s) {
 			${divisionHTML(s, 'division')}
 			<span class="rules">${esc(rulesLine(s))}</span>
 		</button>
-		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}" data-action="clock" aria-label="Start or pause the clock">
-			<span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span>
+		<button class="clock${isRunning(s) ? ' running' : ''}${timeUp ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}" data-action="clock" aria-label="Start or pause the clock">
+			<span data-clock>${clockHTML(clockText(s))}</span>
 		</button>
 		<div class="status-row">${statusLine(s)}</div>
 
@@ -301,7 +307,7 @@ function renderDisplay(s) {
 		<div class="d-top">
 			${divisionHTML(s, 'd-division')}
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
-			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}"><span data-clock>${clockHTML(formatClock(timeLeft(s)))}</span></div>
+			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
 			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : ''}
 		</div>
@@ -396,7 +402,7 @@ function renderSettings(s) {
 			<h3>Rules</h3>
 			<div class="two-col">
 				<label>${rounds ? 'Round length' : 'Match length'} <input data-setting="duration" data-kind="clock" value="${formatClock(st.duration, { hundredths: false })}" inputmode="decimal" /></label>
-				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" /></label>
+				<label>Tiebreaker length <input data-setting="tiebreakerDuration" data-kind="clock" value="${formatClock(st.tiebreakerDuration, { hundredths: false })}" inputmode="decimal" aria-describedby="tb-hint" /><small id="tb-hint" class="muted">0:00 = untimed</small></label>
 				<label>${rounds ? 'Points to win the round' : 'Points to win'} <input type="number" min="0" inputmode="numeric" data-setting="pointsToWin" data-kind="int" value="${st.pointsToWin || ''}" placeholder="No limit" /></label>
 				${rounds ? `<label>Rounds to win the match <input type="number" min="0" inputmode="numeric" data-setting="playTo" data-kind="int" value="${st.playTo || ''}" placeholder="No limit" /></label>` : ''}
 				<label>Simul penalty starts at <input type="number" min="0" inputmode="numeric" data-setting="simulCutoff" data-kind="int" value="${st.simulCutoff || ''}" placeholder="Never" /></label>
@@ -478,7 +484,7 @@ let wasRunning = isRunning(store.state);
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
-	const text = formatClock(left);
+	const text = clockText(s);
 	for (const el of document.querySelectorAll('[data-clock]')) {
 		if (el.dataset.text !== text) {
 			el.dataset.text = text;
@@ -740,7 +746,7 @@ settingsDialog.addEventListener('change', e => {
 		else if (el.dataset.kind === 'int') value = Math.max(0, parseInt(el.value, 10) || 0);
 		else if (el.dataset.kind === 'clock') {
 			value = parseClock(el.value);
-			if (!value) {
+			if (value === null || (!value && key !== 'tiebreakerDuration')) {
 				el.setCustomValidity('Use minutes:seconds, like 3:00');
 				el.reportValidity();
 				return;

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, leader,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, leader, isUntimed,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -490,9 +490,9 @@ test('unity: a half-entered judge does not count, and a level judge casts no vot
 	assert.deepEqual(tallyResult(s()).votes, [1, 0]);
 });
 
-test('unity: tied or split votes go to a 60 second sudden death, then the Marshal names the winner', () => {
-	const { store, s, advance } = unitySetup();
-	assert.equal(s().settings.tiebreakerDuration, 60_000);
+test('unity: tied or split votes go to an untimed sudden death, then the Marshal names the winner', () => {
+	const { store, s } = unitySetup();
+	assert.equal(s().settings.tiebreakerDuration, 0, 'Unity sudden death has no clock');
 	enter(store, 0, 6, 4);
 	enter(store, 1, 3, 5);
 	store.publishTally();
@@ -502,10 +502,11 @@ test('unity: tied or split votes go to a 60 second sudden death, then the Marsha
 	assert.equal(store.nextRoundAction(), 'tiebreaker');
 	store.nextRound();
 	assert.equal(s().suddenDeath, true);
-	assert.equal(s().remaining, 60_000);
+	assert.equal(isUntimed(s()), true);
 	assert.equal(s().tally.published, true, 'the tally stays on record');
-	store.start();
-	advance(20_000);
+	assert.equal(store.start(), false, 'there is no clock to start');
+	assert.equal(timeLeft(s()) > 0, true, 'the round stays open');
+	assert.equal(store.nextRoundAction(), null, 'nothing moves on until a winner is named');
 	assert.equal(store.setTieWinner(1), true);
 	assert.equal(leader(s()), 1);
 	assert.equal(s().fighters[1].score > s().fighters[0].score, true, 'the sudden-death winner is recorded ahead');
@@ -529,18 +530,22 @@ test('unity: three judges with a level one and no majority also go to sudden dea
 	assert.equal(store.nextRoundAction(), 'tiebreaker');
 });
 
-test('unity: sudden death with no winner named still moves on, and standard presets restore 30s', () => {
-	const { store, s, advance } = unitySetup();
+test('unity: untimed sudden death can be called off, and standard presets restore the 30s tiebreaker', () => {
+	const { store, s } = unitySetup();
 	enter(store, 0, 5, 5);
 	enter(store, 1, 5, 5);
 	store.publishTally();
 	store.nextRound();
-	store.start();
-	advance(60_000);
-	store.expire();
-	assert.equal(store.nextRoundAction(), 'next', 'no second sudden death');
+	assert.equal(isUntimed(s()), true);
+	store.endRoundNow();
+	assert.equal(store.nextRoundAction(), 'next', 'ending it records no winner, with no second sudden death');
+	store.undo();
+	assert.equal(store.unpublishTally(), true);
+	assert.equal(s().suddenDeath, false, 'taking the result back calls off sudden death');
+	assert.equal(isUntimed(s()), false);
 	store.applyPreset('standard');
 	assert.equal(s().settings.tiebreakerDuration, 30_000);
+	assert.equal(isUntimed(s()), false);
 });
 
 test('unity: a decided result cannot be given a sudden-death winner, and can be taken back', () => {
