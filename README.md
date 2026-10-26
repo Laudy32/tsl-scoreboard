@@ -24,8 +24,8 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   a simul or No call (only a point if the scores are one apart), then the
   winner shows; a tie goes to a 30-second sudden-death tiebreaker
 - Unity judges' tally: 2 or 3 line judges report to the table. Each judge is a
-  vote for the winner and the display shows the votes (2–0 or 2–1) once you
-  press Publish. The judges' average, rounded so the winner is always ahead,
+  vote for the winner, and once you press Publish the display shows the winner
+  as a unanimous or split decision, or a draw. The judges' average, rounded so the winner is always ahead,
   is the score to record (e.g. in Challonge); if rounding doesn't put the
   winner ahead, the loser is recorded one point below. Tied or split votes go
   to an untimed sudden death, and the Marshal's winner is entered at the table

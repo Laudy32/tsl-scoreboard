@@ -202,6 +202,7 @@ kbd {
 .status.muted { color: var(--muted); font-size: 18px; letter-spacing: 0.2em; }
 .status.alert { color: var(--danger); }
 .status.win { color: var(--text); }
+.status-sub { margin-top: 6px; font: 700 18px/1 var(--display); text-transform: uppercase; letter-spacing: 0.16em; color: var(--gold); }
 .status.win strong { color: var(--c); filter: brightness(1.45) saturate(1.2); font-size: 1.25em; font-weight: 900; }
 
 .fighters {
@@ -531,6 +532,7 @@ body[data-view=display] {
 .d-status { min-height: 7vh; }
 .d-switch { display: inline-block; margin-top: 1vh; padding: 0.6vh 2.5vw; border-radius: 1vh; background: var(--gold); color: #16120a; font: 900 5vh/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .d-status .status { font-size: 6vh; }
+.d-status .status-sub { margin-top: 1.2vh; font-size: 3.6vh; }
 .d-status .status.muted { font-size: 3vh; color: #6d727a; }
 .d-status .status.win { display: inline-block; background: var(--c); color: #fff; padding: 0.4vh 2.5vw; border-radius: 1vh; }
 .d-status .status.win strong { color: #fff; filter: none; }

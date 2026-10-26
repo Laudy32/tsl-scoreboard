@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, leader, isUntimed,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -511,6 +511,7 @@ test('unity: tied or split votes go to an untimed sudden death, then the Marshal
 	assert.equal(leader(s()), 1);
 	assert.equal(s().fighters[1].score > s().fighters[0].score, true, 'the sudden-death winner is recorded ahead');
 	assert.equal(timeLeft(s()), 0, 'the Marshal\'s call ends sudden death');
+	assert.equal(isUntimed(s()), false, 'and the clock goes back to a reading');
 	assert.equal(store.nextRoundAction(), 'next');
 	store.nextRound();
 	assert.equal(s().rounds[0].winner, 1);
@@ -576,4 +577,14 @@ test('tally survives saves from before it existed', () => {
 	const old = initialState();
 	delete old.tally;
 	assert.deepEqual(normalize(old).tally.judges[0], [null, null]);
+});
+
+test('unity: the votes read as a unanimous decision, a split decision or a draw', () => {
+	assert.equal(decisionOf([3, 0]), 'unanimous');
+	assert.equal(decisionOf([0, 2]), 'unanimous');
+	assert.equal(decisionOf([2, 0]), 'unanimous', 'a level third judge casts no vote against');
+	assert.equal(decisionOf([2, 1]), 'split');
+	assert.equal(decisionOf([1, 2]), 'split');
+	assert.equal(decisionOf([1, 1]), 'draw');
+	assert.equal(decisionOf([0, 0]), 'draw', 'every judge level');
 });

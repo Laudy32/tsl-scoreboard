@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, MIN_JUDGES,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES,
 } from './state.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
@@ -66,6 +66,8 @@ function subtitle(f) {
 	return `<div class="subtitle">${f.subtitle.split('\n').map(esc).join('<br>')}</div>`;
 }
 
+const DECISION_LABELS = { unanimous: 'Unanimous decision', split: 'Split decision', draw: 'Draw' };
+
 /** The big line under the clock: winner, tie, time up, sudden death, paused. */
 function statusLine(s) {
 	const mw = matchWinner(s);
@@ -77,8 +79,12 @@ function statusLine(s) {
 		if (!s.settings.liveScore && !s.tally.published) return '<span class="status alert">Time up</span>';
 		if (!s.showWinner && !s.suddenDeath) return '<span class="status alert">Time up</span>';
 		const w = leader(s);
+		if (!s.settings.liveScore && w === null) return `<span class="status alert">${DECISION_LABELS.draw}</span>`;
 		if (w === null) return '<span class="status alert">Tie</span>';
-		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>`;
+		// A decision by the judges names its kind; a sudden-death winner is just listed.
+		const kind = !s.settings.liveScore && s.tally.tieWinner === null
+			? `<div class="status-sub">${DECISION_LABELS[decisionOf(s.tally.votes)]}</div>` : '';
+		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${kind}`;
 	}
 	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
 	if (s.suddenDeath) return '<span class="status alert">Sudden death</span>';
@@ -180,7 +186,7 @@ function tallyPanel(s) {
 		<div class="tally-row tally-head"><span></span>${head}</div>
 		${rows}
 		<div class="tally-row tally-total"><span>Score</span><strong data-tally-total="0">${reported ? shown[0] : '–'}</strong><strong data-tally-total="1">${reported ? shown[1] : '–'}</strong></div>
-		<p class="fe-note" data-tally-votes>${reported ? `Votes ${votes[0]}–${votes[1]}` : ''}</p>
+		<p class="fe-note" data-tally-votes>${reported ? `${DECISION_LABELS[decisionOf(votes)]} (${votes[0]}–${votes[1]})` : ''}</p>
 		${foot}
 	</section>`;
 }
@@ -283,14 +289,13 @@ function renderControl(s) {
 // --- display view ---
 
 function renderDisplay(s) {
-	// Unity shows scores only once the table publishes the judges' tally.
-	const live = s.settings.liveScore || s.tally.published;
+	const live = s.settings.liveScore;
 	const side = i => {
 		const f = s.fighters[i];
 		return `<div class="d-fighter" style="--c:${hex(f.color)}">
 			<div class="d-name">${esc(fighterLabel(s, i))}</div>
 			${subtitle(f)}
-			${live ? `<div class="d-score">${s.settings.liveScore ? f.score : s.tally.votes[i]}</div>` : ''}
+			${live ? `<div class="d-score">${f.score}</div>` : ''}
 			${dots(s, i)}
 		</div>`;
 	};
@@ -307,7 +312,7 @@ function renderDisplay(s) {
 			<div class="d-simul">
 				<img class="d-emblem" src="assets/emblem-256.png" alt="The Saber Legion" />
 				${s.settings.liveScore ? `<div class="d-label">Simul</div>
-				<div class="d-simul-n">${s.simul}</div>` : `<div class="d-label">${s.tally.published ? 'Judge votes' : 'vs'}</div>`}
+				<div class="d-simul-n">${s.simul}</div>` : '<div class="d-label">vs</div>'}
 			</div>
 			${side(1)}
 		</div>
@@ -449,7 +454,7 @@ function refreshTally(s) {
 	const { reported, votes, scores } = tallyResult(s);
 	for (const el of document.querySelectorAll('[data-tally-total]')) el.textContent = reported ? scores[+el.dataset.tallyTotal] : '–';
 	const note = $('[data-tally-votes]');
-	if (note) note.textContent = reported ? `Votes ${votes[0]}–${votes[1]}` : '';
+	if (note) note.textContent = reported ? `${DECISION_LABELS[decisionOf(votes)]} (${votes[0]}–${votes[1]})` : '';
 	const publish = $('[data-action="publish"]');
 	if (publish) publish.disabled = !store.tallyComplete();
 }

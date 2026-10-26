@@ -85,6 +85,12 @@ function emptyTally() {
 /** At least this many line judges must report before a Unity result can be published. */
 export const MIN_JUDGES = 2;
 
+/** How the judges' votes came out: no votes against, some against, or level. */
+export function decisionOf([a, b]) {
+	if (a === b) return 'draw';
+	return Math.min(a, b) === 0 ? 'unanimous' : 'split';
+}
+
 /**
  * The whole-number scores to record (and enter in Challonge): the averages
  * rounded, but never leaving the winner level with or behind the loser. If
@@ -178,7 +184,7 @@ export function timeLeft(s, now = Date.now()) {
 export const isRunning = s => s.startedAt !== null;
 
 /** Sudden death with no clock: it ends when the Marshal names a winner. */
-export const isUntimed = s => s.suddenDeath && s.settings.tiebreakerDuration === 0;
+export const isUntimed = s => s.suddenDeath && s.settings.tiebreakerDuration === 0 && s.remaining > 0;
 
 /** Stands in for the clock reading while sudden death is untimed. */
 const UNTIMED_REMAINING = 1;
