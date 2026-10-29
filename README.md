@@ -60,6 +60,16 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 | Z | Undo |
 | F | Open spectator display |
 
+## One file, no internet
+
+`tsl-scoreboard.html` is the whole scoreboard in a single file, with the code, styles, fonts and logo inside it.
+Send it to someone and they can double-click it to open it in their browser, with no internet and no install.
+The spectator display (Display button) opens from the same file and stays in sync.
+Browsers refuse to run the multi-file version from disk, so use this file for that.
+
+It is generated. After changing anything under `css/`, `js/` or `assets/`, run `npm run build:single` and commit
+the result; `npm test` fails if the file is out of date.
+
 ## Running locally
 
 No build step. Serve the folder with any static server, for example:
