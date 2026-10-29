@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, onDeck, REST_TIME,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -932,4 +932,40 @@ test('pool: saves from before pools existed still load', () => {
 	const old = initialState();
 	delete old.pool;
 	assert.deepEqual(normalize(old).pool.fighters, []);
+});
+
+test('pool: a fighter in back-to-back bouts rests 60 seconds, and the next bout is on deck', () => {
+	const { store, s, advance } = pool(['Ana', 'Bo', 'Cy']);
+	assert.equal(onDeck(s().pool).id, 1);
+	store.loadPoolBout(1);
+	assert.equal(restLeft(s(), store.now()), null, 'nobody has fought yet');
+	assert.equal(onDeck(s().pool).id, 2, 'the loaded bout is no longer on deck');
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	const [first, second] = s().fighters.map(f => f.poolId);
+	store.recordPoolBout();
+	assert.equal(onDeck(s().pool).id, 2);
+	advance(5_000);
+	// Bout 2 is the one of these that shares a fighter with bout 1.
+	const back = s().pool.bouts.find(b => !b.result && [b.a, b.b].some(id => id === first || id === second));
+	store.loadPoolBout(back.id);
+	const r = restLeft(s(), store.now());
+	assert.equal(r.left, REST_TIME - 5_000);
+	assert.equal(r.ids.every(id => id === first || id === second), true);
+	advance(55_000);
+	assert.equal(restLeft(s(), store.now()), null, 'the minute is over');
+});
+
+test('pool: no rest call for fighters who sat out, or once the bout has started', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy', 'Di']);
+	store.loadPoolBout(1);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.recordPoolBout();
+	const [x, y] = [s().pool.bouts[0].a, s().pool.bouts[0].b];
+	const fresh = s().pool.bouts.find(b => !b.result && ![b.a, b.b].some(id => id === x || id === y));
+	store.loadPoolBout(fresh.id);
+	assert.equal(restLeft(s(), store.now()), null);
+	const again = s().pool.bouts.find(b => !b.result && b.id !== fresh.id);
+	store.loadPoolBout(fresh.id === again.id ? s().pool.bouts.find(b => !b.result).id : again.id);
+	store.addPoint(0);
+	assert.equal(restLeft(s(), store.now()), null, 'rest is only shown before the bout starts');
 });

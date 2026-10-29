@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft, onDeck,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -189,6 +189,23 @@ function attemptPanel(s) {
 	</div>`;
 }
 
+const restText = r => formatClock(r.left, { hundredths: false });
+const restNames = (s, r) => r.ids.map(id => esc(s.pool.fighters.find(f => f.id === id)?.name ?? '')).join(' and ');
+
+function restPanel(s) {
+	const r = restLeft(s);
+	if (!r) return '';
+	return `<div class="switch-call rest"><div class="switch-title">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div></div>`;
+}
+
+/** The TV's small "on deck" line: the next pool bout. */
+function onDeckHTML(s) {
+	const b = onDeck(s.pool);
+	if (!b) return '';
+	const name = id => esc(s.pool.fighters.find(f => f.id === id)?.name ?? '');
+	return `<div class="d-deck"><span>On deck</span> ${name(b.a)} vs ${name(b.b)}</div>`;
+}
+
 function medicalPanel(s) {
 	if (!s.medical) return '';
 	return `<div class="switch-call medical">
@@ -311,6 +328,7 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
+		${restPanel(s)}
 		${attemptPanel(s)}
 		${medicalPanel(s)}
 		${switchPanel(s)}
@@ -364,6 +382,7 @@ function renderDisplay(s) {
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
+			${(() => { const r = restLeft(s); return r ? `<div class="d-switch">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div>` : ''; })()}
 			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
 		</div>
 		<div class="d-fighters">
@@ -375,6 +394,7 @@ function renderDisplay(s) {
 			</div>
 			${side(1)}
 		</div>
+		${onDeckHTML(s)}
 		<div class="d-foot">The Saber Legion <span>International Saber Combat Organization</span></div>
 		${displayWindow ? '' : '<button class="btn small d-back" data-action="controls">Back to controls <kbd>F</kbd></button>'}
 	</main>`;
@@ -576,6 +596,7 @@ let wasRunning = isRunning(store.state);
 const timeCalls = s => [s.settings.timeCallsAt, s.settings.timeCallsAt / 2];
 let prevLeft = null;
 let lateAttempt = false;
+let restingNow = false;
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
@@ -594,6 +615,15 @@ function tick() {
 		const late = al === 0;
 		if (late !== lateAttempt) { lateAttempt = late; if (late) render(); }
 	} else lateAttempt = false;
+	if (s.pool.active !== null) {
+		const r = restLeft(s);
+		const rtext = r ? restText(r) : '';
+		for (const el of document.querySelectorAll('[data-rest]')) if (el.textContent !== rtext) el.textContent = rtext;
+		// The rest ends by itself; redraw once so the line goes away.
+		const resting = !!r;
+		if (restingNow && !resting) render();
+		restingNow = resting;
+	} else restingNow = false;
 	if (s.medical) {
 		const mtext = medicalText(s);
 		for (const el of document.querySelectorAll('[data-medical]')) if (el.textContent !== mtext) el.textContent = mtext;

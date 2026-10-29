@@ -150,7 +150,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], bouts: [], active: null, nextId: 1 };
+	return { fighters: [], bouts: [], active: null, nextId: 1, lastFinish: null };
 }
 
 export function initialState(settings = DEFAULT_SETTINGS) {
@@ -266,6 +266,23 @@ export function boutDecided(s, now = Date.now()) {
 
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
 export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/** A fighter who fights back to back gets this long to rest. */
+export const REST_TIME = 60_000;
+
+/** Pool bout is loaded and a fighter in it just fought: the fighters resting and the time left, or null. */
+export function restLeft(s, now = Date.now()) {
+	const last = s.pool.lastFinish;
+	if (s.pool.active === null || !last || hasStarted(s)) return null;
+	const ids = s.fighters.map(f => f.poolId).filter(id => last.ids.includes(id));
+	const left = Math.max(REST_TIME - (now - last.at), 0);
+	return ids.length && left > 0 ? { ids, left } : null;
+}
+
+/** The next bout waiting to be fought, or null. */
+export function onDeck(pool) {
+	return pool.bouts.find(b => !b.result && b.id !== pool.active) ?? null;
+}
 
 /**
  * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
@@ -921,6 +938,7 @@ export class Store {
 				const pf = s.pool.fighters.find(x => x.id === f.poolId);
 				if (pf) pf.cards = structuredClone(f.cards);
 			});
+			s.pool.lastFinish = { at: this.now(), ids: [bout.a, bout.b] };
 			s.pool.active = null;
 		}, { undoable: false });
 	}
