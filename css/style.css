@@ -627,3 +627,4 @@ body[data-view=display] {
 .chip-label { padding: 6px 12px; display: inline-block; }
 
 .d-switch [data-rest] { font-variant-numeric: tabular-nums; margin-left: .4em; }
+.penalty-sheet .pill.taken { border-color: var(--c); }

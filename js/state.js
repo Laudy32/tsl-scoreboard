@@ -701,6 +701,7 @@ export class Store {
 				}
 			}
 			let delta = 0;
+			const before = timeLeft(s, this.now());
 			if (effective === 'red') {
 				f.cards.red++;
 				// Unity keeps no live score here; the card is just recorded.
@@ -717,7 +718,7 @@ export class Store {
 				s.showWinner = true;
 			}
 			s.tagSwitch = null;
-			this.#logEvent(s, 'card', { side, card, effective, converted, reason, delta });
+			this.#logEvent(s, 'card', { side, card, effective, converted, reason, delta, left: before });
 			if (effective === 'red') this.#afterScoring(s);
 		}, { clock: card === 'black' });
 	}
@@ -740,6 +741,34 @@ export class Store {
 			s.showWinner = true;
 			this.#logEvent(s, 'no-show', { side });
 		}, { clock: true });
+	}
+
+	/**
+	 * Takes back one card given by mistake, even after more scoring. A card given in this
+	 * bout also gives back the point it took; a card carried in from an earlier bout only
+	 * comes off the record. Undoing a black card gives the clock back too.
+	 */
+	removeCard(side, card) {
+		if (!(card in CARD_NAMES)) return false;
+		return this.apply(s => {
+			const f = s.fighters[side];
+			if (!f.cards[card]) return false;
+			const entry = [...s.log].reverse().find(e => e.kind === 'card' && e.side === side && !e.voided && e.effective === card);
+			f.cards[card]--;
+			if (entry) {
+				entry.voided = true;
+				if (entry.converted) f.cards.yellow = 1;
+				if (entry.delta) f.score -= entry.delta;
+				if (card === 'black') {
+					s.forfeit = null;
+					s.remaining = entry.left ?? s.settings.duration;
+					s.startedAt = null;
+					s.showWinner = true;
+				}
+			}
+			this.#logEvent(s, 'card-removed', { side, card });
+			if (card === 'red') this.#afterScoring(s);
+		}, { clock: card === 'black' });
 	}
 
 	/** Clears a fighter's cards, e.g. for a new event or a different fighter. */
@@ -1082,11 +1111,13 @@ export function describeEvent(s, e) {
 	}
 	case 'card': {
 		const why = e.reason ? ` · ${e.reason}` : '';
+		if (e.voided) return `${who(e.side)} ${e.card} card${why} (taken back)`;
 		if (e.converted) return `${who(e.side)} second yellow, red card${e.delta ? ' −1' : ''}${why}`;
 		const base = `${who(e.side)} ${e.card} card`;
 		if (e.card === 'black') return `${base}, forfeit${why}`;
 		return `${base}${e.delta ? ' −1' : ''}${why}`;
 	}
+	case 'card-removed': return `${who(e.side)} ${e.card} card taken back`;
 	case 'time-up': return 'Time up';
 	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
 	case 'tally-unpublished': return 'Tally taken back';

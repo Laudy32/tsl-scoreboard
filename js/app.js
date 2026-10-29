@@ -85,8 +85,16 @@ function cardPanel(s) {
 	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
 	const cards = [...['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c])), pick('card', 'no-show', 'No-show')];
 	const reasons = card === 'no-show' ? [] : CARD_REASONS.map(r => pick('reason', r, esc(r)));
+	// Cards already given, each with a way to take it back.
+	const given = [0, 1].flatMap(i => ['yellow', 'red', 'black'].flatMap(c =>
+		Array.from({ length: s.fighters[i].cards[c] }, (_, n) => {
+			const log = s.log.filter(e => e.kind === 'card' && e.side === i && !e.voided && e.effective === c);
+			const why = log[log.length - 1 - (s.fighters[i].cards[c] - 1 - n)]?.reason;
+			return `<button type="button" class="pill taken" style="--c:${hex(s.fighters[i].color)}" data-action="card-remove" data-side="${i}" data-card="${c}" aria-label="Take back ${CARD_NAMES[c]} card for ${esc(fighterLabel(s, i))}">${esc(fighterLabel(s, i))} · ${CARD_NAMES[c]}${why ? ` · ${esc(why)}` : ''} ✕</button>`;
+		})));
 	return `<section class="penalty-sheet">
 		<h3>Penalty</h3>
+		${given.length ? `<div class="pills">${given.join('')}</div>` : ''}
 		<div class="pills">${fighters.join('')}</div>
 		<div class="pills">${cards.join('')}</div>
 		${reasons.length ? `<div class="pills">${reasons.join('')}</div>` : ''}
@@ -779,6 +787,11 @@ const actions = {
 		const v = key === 'side' ? +value : value;
 		penalty[key] = penalty[key] === v ? null : v;
 		render();
+	},
+	'card-remove': async el => {
+		const side = +el.dataset.side, card = el.dataset.card;
+		if (!await confirmAction(`Take back the ${card} card for ${fighterLabel(store.state, side)}?${card === 'red' ? ' Their point comes back.' : ''}${card === 'black' ? ' The bout reopens.' : ''}`, 'Take back')) return;
+		store.removeCard(side, card);
 	},
 	'penalty-close': () => {
 		penalty = null;
