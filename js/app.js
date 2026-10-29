@@ -219,7 +219,7 @@ function switchPanel(s) {
 		: `<button class="btn" style="--c:${hex(s.fighters[i].color)}" data-action="stay" data-side="${i}" ${store.canStay(i) ? '' : 'disabled'}>${esc(fighterLabel(s, i))}: −1 to stay</button>`);
 	return `<div class="switch-call">
 		<div class="switch-title">${switchText(s)}</div>
-		<div class="row">${stayButton(0)}<button class="btn" data-action="switch-done">Switched</button>${stayButton(1)}</div>
+		<div class="row tag">${stayButton(0)}<button class="btn" data-action="switch-done">Switched</button>${stayButton(1)}</div>
 	</div>`;
 }
 
@@ -514,9 +514,11 @@ function renderHistory(s) {
 
 function renderPool(s) {
 	const p = s.pool;
+	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
+	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
 	const locked = p.bouts.some(b => b.result);
-	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 	const bouts = p.bouts.map(b => {
 		const r = b.result;
 		const status = r
@@ -525,7 +527,7 @@ function renderPool(s) {
 				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
 		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
 	}).join('');
-	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td class="num">${r.wins}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 	return `<form method="dialog" class="sheet-body">
 		<header class="sheet-head"><h2>Pool</h2><button class="btn small" value="close">Done</button></header>
 		<section>

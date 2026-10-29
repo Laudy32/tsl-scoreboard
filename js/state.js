@@ -906,6 +906,13 @@ export class Store {
 		return this.apply(s => {
 			const bout = s.pool.bouts.find(b => b.id === boutId);
 			if (!bout || bout.result) return false;
+			// Cards given in a bout that is being left unrecorded still count.
+			if (s.pool.active !== null) {
+				for (const f of s.fighters) {
+					const pf = s.pool.fighters.find(x => x.id === f.poolId);
+					if (pf) pf.cards = structuredClone(f.cards);
+				}
+			}
 			const fresh = initialState(s.settings);
 			Object.assign(s, { ...fresh, pool: s.pool });
 			[bout.a, bout.b].forEach((id, i) => {
