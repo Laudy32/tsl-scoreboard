@@ -1035,3 +1035,32 @@ test('cards: a card carried from an earlier bout comes off the record without to
 	assert.equal(s().fighters[side].cards.yellow, 0);
 	assert.equal(s().fighters[side].score, 1);
 });
+
+test('pool: Next match records the decided bout and loads the next one', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	assert.equal(store.nextPoolBout().id, 1, 'before any bout, the first one is offered');
+	assert.equal(store.advancePool(), true);
+	assert.equal(s().pool.active, 1);
+	assert.equal(store.nextPoolBout(), null, 'not while the loaded bout is still being fought');
+	assert.equal(store.advancePool(), false);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(store.nextPoolBout().id, 2);
+	assert.equal(store.advancePool(), true);
+	assert.equal(s().pool.bouts[0].result.scores[0], 10, 'the first result was recorded on the way');
+	assert.equal(s().pool.active, 2);
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.advancePool();
+	assert.equal(s().pool.active, 3);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(store.nextPoolBout(), null, 'the last bout has no next one');
+	assert.equal(store.recordPoolBout(), true);
+	assert.equal(s().pool.bouts.every(b => b.result), true);
+});
+
+test('pool: no Next match without a pool, or in the middle of an unrecorded bout', () => {
+	const { store } = setup();
+	assert.equal(store.nextPoolBout(), null);
+	const p = pool(['Ana', 'Bo']);
+	p.store.addPoint(0);
+	assert.equal(p.store.nextPoolBout(), null, 'a hand-played bout is not replaced by the pool');
+});

@@ -932,45 +932,68 @@ export class Store {
 
 	/** Puts a bout's two fighters on the scoreboard, with a fresh round and the cards they already carry. */
 	loadPoolBout(boutId) {
-		return this.apply(s => {
-			const bout = s.pool.bouts.find(b => b.id === boutId);
-			if (!bout || bout.result) return false;
-			// Cards given in a bout that is being left unrecorded still count.
-			if (s.pool.active !== null) {
-				for (const f of s.fighters) {
-					const pf = s.pool.fighters.find(x => x.id === f.poolId);
-					if (pf) pf.cards = structuredClone(f.cards);
-				}
+		return this.apply(s => this.#loadBout(s, boutId), { undoable: false });
+	}
+
+	#loadBout(s, boutId) {
+		const bout = s.pool.bouts.find(b => b.id === boutId);
+		if (!bout || bout.result) return false;
+		// Cards given in a bout that is being left unrecorded still count.
+		if (s.pool.active !== null) {
+			for (const f of s.fighters) {
+				const pf = s.pool.fighters.find(x => x.id === f.poolId);
+				if (pf) pf.cards = structuredClone(f.cards);
 			}
-			const fresh = initialState(s.settings);
-			Object.assign(s, { ...fresh, pool: s.pool });
-			[bout.a, bout.b].forEach((id, i) => {
-				const pf = s.pool.fighters.find(f => f.id === id);
-				Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
-			});
-			s.pool.active = boutId;
-		}, { undoable: false });
+		}
+		const fresh = initialState(s.settings);
+		Object.assign(s, { ...fresh, pool: s.pool });
+		[bout.a, bout.b].forEach((id, i) => {
+			const pf = s.pool.fighters.find(f => f.id === id);
+			Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+		});
+		s.pool.active = boutId;
 	}
 
 	/** Records the loaded bout's result once it is decided, and carries the cards back to the pool. */
 	recordPoolBout() {
+		return this.apply(s => this.#recordBout(s), { undoable: false });
+	}
+
+	#recordBout(s) {
+		const bout = s.pool.bouts.find(b => b.id === s.pool.active);
+		if (!bout || !boutDecided(s, this.now())) return false;
+		const ids = s.fighters.map(f => f.poolId);
+		if (!ids.includes(bout.a) || !ids.includes(bout.b)) return false;
+		const scores = boutScores(s);
+		const w = leader(s);
+		bout.result = {
+			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
+			winner: w === null ? null : ids[w],
+		};
+		s.fighters.forEach(f => {
+			const pf = s.pool.fighters.find(x => x.id === f.poolId);
+			if (pf) pf.cards = structuredClone(f.cards);
+		});
+		s.pool.lastFinish = { at: this.now(), ids: [bout.a, bout.b] };
+		s.pool.active = null;
+	}
+
+	/** The next pool bout to fight, or null. It is only offered once the loaded bout is decided, or before any bout has started. */
+	nextPoolBout() {
+		const s = this.state;
+		const next = s.pool.bouts.find(b => !b.result && b.id !== s.pool.active);
+		if (!next) return null;
+		if (s.pool.active !== null ? !boutDecided(s, this.now()) : hasStarted(s)) return null;
+		return next;
+	}
+
+	/** Records the decided bout (if one is loaded) and puts the next pool fighters on the scoreboard. */
+	advancePool() {
+		const next = this.nextPoolBout();
+		if (!next) return false;
 		return this.apply(s => {
-			const bout = s.pool.bouts.find(b => b.id === s.pool.active);
-			if (!bout || !boutDecided(s, this.now())) return false;
-			const ids = s.fighters.map(f => f.poolId);
-			if (!ids.includes(bout.a) || !ids.includes(bout.b)) return false;
-			const scores = boutScores(s);
-			const w = leader(s);
-			bout.result = {
-				scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
-				winner: w === null ? null : ids[w],
-			};
-			s.fighters.forEach(f => {
-				const pf = s.pool.fighters.find(x => x.id === f.poolId);
-				if (pf) pf.cards = structuredClone(f.cards);
-			});
-			s.pool.lastFinish = { at: this.now(), ids: [bout.a, bout.b] };
-			s.pool.active = null;
+			if (s.pool.active !== null && this.#recordBout(s) === false) return false;
+			return this.#loadBout(s, next.id);
 		}, { undoable: false });
 	}
 

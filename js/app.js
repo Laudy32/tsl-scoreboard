@@ -160,7 +160,10 @@ function clockHTML(text) {
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
 		const sd = store.nextRoundAction() === 'tiebreaker';
-		return `<button class="btn primary" data-action="next">${sd ? `Sudden death${s.settings.tiebreakerDuration ? ` · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : ''}` : nextLabel(s)}</button>`;
+		if (sd) return `<button class="btn primary" data-action="next">Sudden death${s.settings.tiebreakerDuration ? ` · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : ''}</button>`;
+		if (usesRounds(s) && store.nextRoundAction()) return `<button class="btn primary" data-action="next">${nextLabel(s)}</button>`;
+		if (store.nextPoolBout()) return '<button class="btn primary" data-action="next-pool">Next match</button>';
+		return '';
 	}
 	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
 	if (timeLeft(s) === 0) {
@@ -286,6 +289,15 @@ function fighterPanel(s, side) {
 	</div>`;
 }
 
+/** The Next button: rounds in Championship Series, a tiebreaker when the bout is tied, or the next pool bout. Otherwise there is none. */
+function nextButton(s, next) {
+	if (!s.settings.liveScore) return '';
+	if (usesRounds(s) || next === 'tiebreaker') {
+		return `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>`;
+	}
+	return store.nextPoolBout() ? '<button class="btn" data-action="next-pool">Next match <kbd>N</kbd></button>' : '';
+}
+
 function renderControl(s) {
 	const next = store.nextRoundAction();
 	const timeUp = timeLeft(s) === 0;
@@ -338,10 +350,10 @@ function renderControl(s) {
 			${s.finalExchange ? finalExchangeNote() : ''}
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
-				${s.settings.liveScore ? `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>` : ''}
+				${nextButton(s, next)}
 				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>${usesRounds(s) ? 'End round' : 'End match'}</button>
 			</div>
-			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
+			${matchWinner(s) !== null || (!usesRounds(s) && !store.nextPoolBout() && boutDecided(s)) ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
 		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Pool</button></div>
@@ -354,7 +366,7 @@ function renderControl(s) {
 				<tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>+1 / −1 simul</td></tr>
 				<tr><td><kbd>E</kbd> / <kbd>D</kbd></td><td>+1 / −1 right fighter</td></tr>
 				<tr><td><kbd>Space</kbd></td><td>Start / pause (show or hide the winner once the bout is decided)</td></tr>
-				<tr><td><kbd>N</kbd></td><td>Next round (next match outside Championship Series) or tiebreaker</td></tr>
+				<tr><td><kbd>N</kbd></td><td>Next round in Championship Series, a tiebreaker, or the next pool match</td></tr>
 				<tr><td><kbd>Z</kbd></td><td>Undo</td></tr>
 				<tr><td><kbd>F</kbd></td><td>Open the spectator display</td></tr>
 			</table>
@@ -870,6 +882,7 @@ const actions = {
 	},
 	undo: () => store.undo(),
 	next: () => store.nextRound(),
+	'next-pool': () => store.advancePool(),
 	end: async () => {
 		if (await confirmAction('End this round now? The clock goes to zero.', 'End round')) store.endRoundNow();
 	},
@@ -1030,7 +1043,7 @@ window.addEventListener('keydown', e => {
 		e: () => store.addPoint(1, 1),
 		d: () => store.addPoint(1, -1),
 		' ': () => (timeLeft(store.state) ? store.toggleClock() : store.toggleShowWinner()),
-		n: () => store.nextRound(),
+		n: () => (usesRounds(store.state) || store.nextRoundAction() === 'tiebreaker' ? store.nextRound() : store.advancePool()),
 		z: () => store.undo(),
 		f: () => (view === 'display' ? setView('control') : openDisplay()),
 		escape: () => view === 'display' && setView('control'),
