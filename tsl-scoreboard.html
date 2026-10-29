@@ -640,6 +640,9 @@ body[data-view=display] {
 
 .d-switch [data-rest] { font-variant-numeric: tabular-nums; margin-left: .4em; }
 .penalty-sheet .pill.taken { border-color: var(--c); }
+.pool-actions { display: flex; gap: 6px; }
+.inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
+.sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
 </style>
 	<script type="module">
 // Scoreboard state and scoring rules. Pure logic: no DOM access here, so it
@@ -1534,36 +1537,61 @@ class Store {
 
 	// --- pool ---
 
-	/** The pool's setup is locked once a result is recorded. */
-	#poolLocked() {
-		return this.state.pool.bouts.some(b => b.result);
+	#boutId(s) {
+		return s.pool.bouts.reduce((m, b) => Math.max(m, b.id), 0) + 1;
+	}
+
+	/** The pool fighter with this name (any capitalisation), added if new. Returns its id, or null for a blank name. */
+	#poolFighter(s, name) {
+		const clean = String(name).trim().slice(0, 40);
+		if (!clean) return null;
+		const found = s.pool.fighters.find(f => f.name.toLowerCase() === clean.toLowerCase());
+		if (found) return found.id;
+		s.pool.fighters.push({ id: s.pool.nextId, name: clean, cards: noCards() });
+		return s.pool.nextId++;
 	}
 
 	addPoolFighter(name) {
-		const clean = String(name).trim().slice(0, 40);
 		return this.apply(s => {
-			if (!clean || this.#poolLocked() || s.pool.fighters.some(f => f.name.toLowerCase() === clean.toLowerCase())) return false;
-			s.pool.fighters.push({ id: s.pool.nextId++, name: clean, cards: noCards() });
-			s.pool.bouts = [];
-			s.pool.active = null;
+			const had = s.pool.fighters.length;
+			if (this.#poolFighter(s, name) === null || s.pool.fighters.length === had) return false;
 		}, { undoable: false });
 	}
 
+	/** A fighter who is in a bout stays; remove the bouts first. */
 	removePoolFighter(id) {
 		return this.apply(s => {
-			if (this.#poolLocked() || !s.pool.fighters.some(f => f.id === id)) return false;
+			if (s.pool.bouts.some(b => b.a === id || b.b === id) || !s.pool.fighters.some(f => f.id === id)) return false;
 			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
-			s.pool.bouts = [];
-			s.pool.active = null;
 		}, { undoable: false });
 	}
 
-	/** Lays out every pairing once. */
+	/** Adds one matchup at the end of the order, creating either fighter if the name is new. */
+	addPoolBout(nameA, nameB) {
+		return this.apply(s => {
+			const a = this.#poolFighter(s, nameA);
+			const b = this.#poolFighter(s, nameB);
+			if (a === null || b === null || a === b) return false;
+			s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+		}, { undoable: false });
+	}
+
+	/** Takes a matchup off the list, if it has not been fought and is not on the scoreboard. */
+	removePoolBout(id) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === id);
+			if (!bout || bout.result || s.pool.active === id) return false;
+			s.pool.bouts = s.pool.bouts.filter(b => b.id !== id);
+		}, { undoable: false });
+	}
+
+	/** Adds every pairing of the pool's fighters that is not in the list yet (round robin). */
 	buildPoolBouts() {
 		return this.apply(s => {
-			if (this.#poolLocked() || s.pool.fighters.length < 2) return false;
-			s.pool.bouts = roundRobin(s.pool.fighters.map(f => f.id)).map(([a, b], i) => ({ id: i + 1, a, b, result: null }));
-			s.pool.active = null;
+			const have = new Set(s.pool.bouts.map(b => [b.a, b.b].sort().join('-')));
+			const missing = roundRobin(s.pool.fighters.map(f => f.id)).filter(p => !have.has([...p].sort().join('-')));
+			if (!missing.length) return false;
+			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
 		}, { undoable: false });
 	}
 
@@ -2353,14 +2381,14 @@ function renderPool(s) {
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
-	const locked = p.bouts.some(b => b.result);
-	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+	const inBout = f => p.bouts.some(b => b.a === f.id || b.b === f.id);
+	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 	const bouts = p.bouts.map(b => {
 		const r = b.result;
 		const status = r
 			? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
 			: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
-				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
+				: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
 		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
 	}).join('');
 	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
@@ -2369,10 +2397,15 @@ function renderPool(s) {
 		<section>
 			<h3>Fighters</h3>
 			<div class="chips">${chips}</div>
-			${locked ? '' : `<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>`}
-			${!locked && p.fighters.length > 1 ? `<div class="row"><button type="button" class="btn" data-action="pool-build">${p.bouts.length ? 'Rebuild bouts' : 'Build bouts'}</button></div>` : ''}
+			<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>
 		</section>
-		${bouts ? `<section><h3>Bouts</h3><ul class="pool-bouts">${bouts}</ul></section>` : ''}
+		<section>
+			<h3>Bouts</h3>
+			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
+			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
+			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
+			${p.fighters.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
+		</section>
 		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
 	</form>`;
@@ -2670,6 +2703,15 @@ const actions = {
 		store.removePoolFighter(+el.dataset.id);
 		refreshPool();
 	},
+	'pool-bout-add': () => {
+		if (!store.addPoolBout($('#pool-a').value, $('#pool-b').value)) return;
+		refreshPool();
+		$('#pool-a').focus();
+	},
+	'pool-bout-remove': el => {
+		store.removePoolBout(+el.dataset.id);
+		refreshPool();
+	},
 	'pool-build': () => {
 		store.buildPoolBouts();
 		refreshPool();
@@ -2827,9 +2869,14 @@ settingsDialog.addEventListener('change', e => {
 	}
 });
 poolDialog.addEventListener('keydown', e => {
-	if (e.key === 'Enter' && e.target.id === 'pool-name') {
+	if (e.key !== 'Enter') return;
+	if (e.target.id === 'pool-name') {
 		e.preventDefault();
 		actions['pool-add']();
+	} else if (e.target.id === 'pool-a' || e.target.id === 'pool-b') {
+		e.preventDefault();
+		if (e.target.id === 'pool-a' && !$('#pool-b').value) $('#pool-b').focus();
+		else actions['pool-bout-add']();
 	}
 });
 

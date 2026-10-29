@@ -537,14 +537,14 @@ function renderPool(s) {
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
-	const locked = p.bouts.some(b => b.result);
-	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+	const inBout = f => p.bouts.some(b => b.a === f.id || b.b === f.id);
+	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 	const bouts = p.bouts.map(b => {
 		const r = b.result;
 		const status = r
 			? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
 			: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
-				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
+				: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
 		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
 	}).join('');
 	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
@@ -553,10 +553,15 @@ function renderPool(s) {
 		<section>
 			<h3>Fighters</h3>
 			<div class="chips">${chips}</div>
-			${locked ? '' : `<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>`}
-			${!locked && p.fighters.length > 1 ? `<div class="row"><button type="button" class="btn" data-action="pool-build">${p.bouts.length ? 'Rebuild bouts' : 'Build bouts'}</button></div>` : ''}
+			<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>
 		</section>
-		${bouts ? `<section><h3>Bouts</h3><ul class="pool-bouts">${bouts}</ul></section>` : ''}
+		<section>
+			<h3>Bouts</h3>
+			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
+			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
+			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
+			${p.fighters.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
+		</section>
 		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
 	</form>`;
@@ -854,6 +859,15 @@ const actions = {
 		store.removePoolFighter(+el.dataset.id);
 		refreshPool();
 	},
+	'pool-bout-add': () => {
+		if (!store.addPoolBout($('#pool-a').value, $('#pool-b').value)) return;
+		refreshPool();
+		$('#pool-a').focus();
+	},
+	'pool-bout-remove': el => {
+		store.removePoolBout(+el.dataset.id);
+		refreshPool();
+	},
 	'pool-build': () => {
 		store.buildPoolBouts();
 		refreshPool();
@@ -1011,9 +1025,14 @@ settingsDialog.addEventListener('change', e => {
 	}
 });
 poolDialog.addEventListener('keydown', e => {
-	if (e.key === 'Enter' && e.target.id === 'pool-name') {
+	if (e.key !== 'Enter') return;
+	if (e.target.id === 'pool-name') {
 		e.preventDefault();
 		actions['pool-add']();
+	} else if (e.target.id === 'pool-a' || e.target.id === 'pool-b') {
+		e.preventDefault();
+		if (e.target.id === 'pool-a' && !$('#pool-b').value) $('#pool-b').focus();
+		else actions['pool-bout-add']();
 	}
 });
 

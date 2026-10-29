@@ -890,36 +890,61 @@ export class Store {
 
 	// --- pool ---
 
-	/** The pool's setup is locked once a result is recorded. */
-	#poolLocked() {
-		return this.state.pool.bouts.some(b => b.result);
+	#boutId(s) {
+		return s.pool.bouts.reduce((m, b) => Math.max(m, b.id), 0) + 1;
+	}
+
+	/** The pool fighter with this name (any capitalisation), added if new. Returns its id, or null for a blank name. */
+	#poolFighter(s, name) {
+		const clean = String(name).trim().slice(0, 40);
+		if (!clean) return null;
+		const found = s.pool.fighters.find(f => f.name.toLowerCase() === clean.toLowerCase());
+		if (found) return found.id;
+		s.pool.fighters.push({ id: s.pool.nextId, name: clean, cards: noCards() });
+		return s.pool.nextId++;
 	}
 
 	addPoolFighter(name) {
-		const clean = String(name).trim().slice(0, 40);
 		return this.apply(s => {
-			if (!clean || this.#poolLocked() || s.pool.fighters.some(f => f.name.toLowerCase() === clean.toLowerCase())) return false;
-			s.pool.fighters.push({ id: s.pool.nextId++, name: clean, cards: noCards() });
-			s.pool.bouts = [];
-			s.pool.active = null;
+			const had = s.pool.fighters.length;
+			if (this.#poolFighter(s, name) === null || s.pool.fighters.length === had) return false;
 		}, { undoable: false });
 	}
 
+	/** A fighter who is in a bout stays; remove the bouts first. */
 	removePoolFighter(id) {
 		return this.apply(s => {
-			if (this.#poolLocked() || !s.pool.fighters.some(f => f.id === id)) return false;
+			if (s.pool.bouts.some(b => b.a === id || b.b === id) || !s.pool.fighters.some(f => f.id === id)) return false;
 			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
-			s.pool.bouts = [];
-			s.pool.active = null;
 		}, { undoable: false });
 	}
 
-	/** Lays out every pairing once. */
+	/** Adds one matchup at the end of the order, creating either fighter if the name is new. */
+	addPoolBout(nameA, nameB) {
+		return this.apply(s => {
+			const a = this.#poolFighter(s, nameA);
+			const b = this.#poolFighter(s, nameB);
+			if (a === null || b === null || a === b) return false;
+			s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+		}, { undoable: false });
+	}
+
+	/** Takes a matchup off the list, if it has not been fought and is not on the scoreboard. */
+	removePoolBout(id) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === id);
+			if (!bout || bout.result || s.pool.active === id) return false;
+			s.pool.bouts = s.pool.bouts.filter(b => b.id !== id);
+		}, { undoable: false });
+	}
+
+	/** Adds every pairing of the pool's fighters that is not in the list yet (round robin). */
 	buildPoolBouts() {
 		return this.apply(s => {
-			if (this.#poolLocked() || s.pool.fighters.length < 2) return false;
-			s.pool.bouts = roundRobin(s.pool.fighters.map(f => f.id)).map(([a, b], i) => ({ id: i + 1, a, b, result: null }));
-			s.pool.active = null;
+			const have = new Set(s.pool.bouts.map(b => [b.a, b.b].sort().join('-')));
+			const missing = roundRobin(s.pool.fighters.map(f => f.id)).filter(p => !have.has([...p].sort().join('-')));
+			if (!missing.length) return false;
+			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
 		}, { undoable: false });
 	}
 
