@@ -966,3 +966,12 @@ test('pool: no rest call for fighters who sat out, or once the bout has started'
 	store.addPoint(0);
 	assert.equal(restLeft(s(), store.now()), null, 'rest is only shown before the bout starts');
 });
+
+test('pool: cards given in a bout that is abandoned still follow the fighter', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	store.loadPoolBout(1);
+	const carded = s().fighters[0].poolId;
+	store.giveCard(0, 'red');
+	store.loadPoolBout(2);
+	assert.equal(s().pool.fighters.find(f => f.id === carded).cards.red, 1);
+});

@@ -336,7 +336,10 @@ kbd {
 	gap: 8px;
 }
 .switch-title { text-align: center; font: 800 26px/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; color: var(--gold); }
-.switch-call .row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; }
+.switch-call .row { justify-content: center; }
+.switch-call .row > .btn { flex: 0 1 auto; min-width: 140px; }
+.switch-call .row.tag { display: grid; grid-template-columns: 1fr auto 1fr; }
+.switch-call .row.tag > .btn { min-width: 0; }
 .switch-call .btn[data-action="stay"] { border-color: var(--c); }
 .stayed { display: flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--c); color: #fff; font-weight: 700; padding: 8px; }
 
