@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft, onDeck,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -198,14 +198,6 @@ function restPanel(s) {
 	return `<div class="switch-call rest"><div class="switch-title">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div></div>`;
 }
 
-/** The TV's small "on deck" line: the next pool bout. */
-function onDeckHTML(s) {
-	const b = onDeck(s.pool);
-	if (!b) return '';
-	const name = id => esc(s.pool.fighters.find(f => f.id === id)?.name ?? '');
-	return `<div class="d-deck"><span>On deck</span> ${name(b.a)} vs ${name(b.b)}</div>`;
-}
-
 function medicalPanel(s) {
 	if (!s.medical) return '';
 	return `<div class="switch-call medical">
@@ -394,7 +386,6 @@ function renderDisplay(s) {
 			</div>
 			${side(1)}
 		</div>
-		${onDeckHTML(s)}
 		<div class="d-foot">The Saber Legion <span>International Saber Combat Organization</span></div>
 		${displayWindow ? '' : '<button class="btn small d-back" data-action="controls">Back to controls <kbd>F</kbd></button>'}
 	</main>`;

@@ -623,6 +623,4 @@ body[data-view=display] {
 .pool-result { color: var(--gold, #d4a640); font-weight: 600; }
 .chip-label { padding: 6px 12px; display: inline-block; }
 
-.d-deck { text-align: center; font-size: clamp(14px, 1.8vw, 26px); color: var(--muted, #9aa0aa); margin-top: 2.2vh; }
-.d-deck span { color: var(--gold, #d4a640); text-transform: uppercase; letter-spacing: .12em; margin-right: .5em; }
 .d-switch [data-rest] { font-variant-numeric: tabular-nums; margin-left: .4em; }

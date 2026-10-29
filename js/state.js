@@ -279,11 +279,6 @@ export function restLeft(s, now = Date.now()) {
 	return ids.length && left > 0 ? { ids, left } : null;
 }
 
-/** The next bout waiting to be fought, or null. */
-export function onDeck(pool) {
-	return pool.bouts.find(b => !b.result && b.id !== pool.active) ?? null;
-}
-
 /**
  * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
  * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
