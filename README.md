@@ -33,6 +33,13 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   (intentional ring out is one of them), then give it. Two yellows make a red. A red takes a point and is
   the only thing that can take a score below zero. A black card forfeits the
   bout. Cards show beside the name and are cleared in Settings
+- Time calls (beeps at 0:30 and 0:15, or 1:00 and 0:30 in Total Bout Time), a
+  switch-sides call at half the winning score, a 3:00 medical hold and a
+  no-show (0–10) from the Penalty sheet
+- Total Bout Time match type, and an attempt clock for sudden deaths over 30s
+- Pool: add fighters, build the round-robin bouts, load a bout onto the
+  scoreboard, record its result, and see standings (wins, then points for, then
+  fewest against). Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV

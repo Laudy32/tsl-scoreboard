@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -326,7 +326,8 @@ function renderControl(s) {
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
-		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button></div>
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Pool</button></div>
+		${s.pool.active !== null && boutDecided(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
 		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
@@ -500,11 +501,46 @@ function renderHistory(s) {
 	</form>`;
 }
 
+function renderPool(s) {
+	const p = s.pool;
+	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
+	const locked = p.bouts.some(b => b.result);
+	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+	const bouts = p.bouts.map(b => {
+		const r = b.result;
+		const status = r
+			? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
+			: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
+				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
+		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
+	}).join('');
+	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td class="num">${r.wins}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+	return `<form method="dialog" class="sheet-body">
+		<header class="sheet-head"><h2>Pool</h2><button class="btn small" value="close">Done</button></header>
+		<section>
+			<h3>Fighters</h3>
+			<div class="chips">${chips}</div>
+			${locked ? '' : `<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>`}
+			${!locked && p.fighters.length > 1 ? `<div class="row"><button type="button" class="btn" data-action="pool-build">${p.bouts.length ? 'Rebuild bouts' : 'Build bouts'}</button></div>` : ''}
+		</section>
+		${bouts ? `<section><h3>Bouts</h3><ul class="pool-bouts">${bouts}</ul></section>` : ''}
+		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">For</th><th class="num">Against</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
+		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
+	</form>`;
+}
+
+function refreshPool() {
+	const top = poolDialog.scrollTop;
+	poolDialog.innerHTML = renderPool(store.state);
+	poolDialog.scrollTop = top;
+}
+
 // --- rendering ---
 
 const app = $('#app');
 const settingsDialog = $('#settings');
 const historyDialog = $('#history');
+const poolDialog = $('#pool');
 
 // A judge's number is committed on change; rebuilding the page then would
 // drop focus from the next field, so just refresh the totals and Publish.
@@ -755,6 +791,41 @@ const actions = {
 	'switch-done': () => store.switchDone(),
 	'sides-done': () => store.sidesDone(),
 	attempt: () => store.attempt(),
+	pool: () => {
+		refreshPool();
+		poolDialog.showModal();
+	},
+	'pool-add': () => {
+		const input = $('#pool-name');
+		if (store.addPoolFighter(input.value)) {
+			refreshPool();
+			$('#pool-name').focus();
+		}
+	},
+	'pool-remove': el => {
+		store.removePoolFighter(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-build': () => {
+		store.buildPoolBouts();
+		refreshPool();
+	},
+	'pool-load': async el => {
+		if (hasStarted(store.state) && matchWinner(store.state) === null && !boutDecided(store.state) &&
+			!await confirmAction('Load this bout? The current scores and clock are replaced.', 'Load bout')) return;
+		store.loadPoolBout(+el.dataset.id);
+		poolDialog.close();
+	},
+	'pool-record': () => store.recordPoolBout(),
+	'pool-undo': el => {
+		store.clearPoolResult(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-clear': async () => {
+		if (!await confirmAction('Clear the pool? Its fighters, bouts and results are removed.', 'Clear pool')) return;
+		store.clearPool();
+		refreshPool();
+	},
 	medical: () => store.startMedical(),
 	'medical-end': () => store.endMedical(),
 	duration: el => {
@@ -890,6 +961,13 @@ settingsDialog.addEventListener('change', e => {
 		$('#presets').innerHTML = presetsHTML(store.state.settings);
 	}
 });
+poolDialog.addEventListener('keydown', e => {
+	if (e.key === 'Enter' && e.target.id === 'pool-name') {
+		e.preventDefault();
+		actions['pool-add']();
+	}
+});
+
 settingsDialog.addEventListener('keydown', e => {
 	if (e.key === 'Enter' && e.target.id === 'time-left') {
 		e.preventDefault();

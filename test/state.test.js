@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -824,4 +824,112 @@ test('attempt clock: only a timed sudden death over 30s, cleared by the table, n
 	assert.equal(s().attemptMade, true);
 	store.resetRound();
 	assert.equal(s().attemptMade, false);
+});
+
+function pool(names, settings = {}) {
+	const env = setup(settings);
+	for (const n of names) env.store.addPoolFighter(n);
+	env.store.buildPoolBouts();
+	return env;
+}
+
+test('pool: round robin pairs everyone once and gives fighters a rest', () => {
+	const pairs = roundRobin([1, 2, 3, 4, 5]);
+	assert.equal(pairs.length, 10);
+	assert.equal(new Set(pairs.map(p => [...p].sort().join('-'))).size, 10);
+	const four = roundRobin([1, 2, 3, 4]);
+	assert.equal(four.length, 6);
+	for (let i = 0; i < 6; i += 2) {
+		assert.deepEqual([...four[i], ...four[i + 1]].sort(), [1, 2, 3, 4], 'each round has everyone fighting once');
+	}
+});
+
+test('pool: fighters and bouts, with setup locked once a result is in', () => {
+	const { store, s } = setup();
+	assert.equal(store.addPoolFighter('  Ana '), true);
+	assert.equal(store.addPoolFighter('ana'), false, 'no duplicate names');
+	assert.equal(store.addPoolFighter(''), false);
+	store.addPoolFighter('Bo');
+	store.addPoolFighter('Cy');
+	assert.equal(store.buildPoolBouts(), true);
+	assert.equal(s().pool.bouts.length, 3);
+	store.removePoolFighter(s().pool.fighters[2].id);
+	assert.equal(s().pool.bouts.length, 0, 'changing the fighters clears the bouts');
+	store.buildPoolBouts();
+	assert.equal(s().pool.bouts.length, 1);
+});
+
+test('pool: load a bout, record the result, and standings rank wins then points for then fewest against', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	const [b1] = s().pool.bouts;
+	store.loadPoolBout(b1.id);
+	const names = s().fighters.map(f => f.name);
+	assert.deepEqual(names, [s().pool.fighters.find(f => f.id === b1.a).name, s().pool.fighters.find(f => f.id === b1.b).name]);
+	assert.equal(store.recordPoolBout(), false, 'not decided yet');
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.addPoint(0);
+	assert.equal(boutDecided(s(), store.now()), true);
+	store.swapSides();
+	assert.equal(store.recordPoolBout(), true, 'swapping sides does not confuse who is who');
+	const r = s().pool.bouts[0].result;
+	assert.equal(r.winner, b1.b);
+	assert.equal(r.scores[0], 1);
+	assert.equal(r.scores[1], 10);
+	assert.equal(s().pool.active, null);
+	assert.equal(store.addPoolFighter('Di'), false, 'locked after a result');
+
+	store.undo();
+	assert.equal(s().pool.bouts[0].result !== null, true, 'undo never rolls the pool back');
+
+	const table = poolStandings(s().pool);
+	assert.equal(table[0].id, b1.b);
+	assert.equal(table[0].wins, 1);
+	assert.equal(table[0].pointsFor, 10);
+	assert.equal(table.at(-1).played, 0, 'the fighter who has not fought is last');
+	store.clearPoolResult(b1.id);
+	assert.equal(poolStandings(s().pool)[0].wins, 0);
+});
+
+test('pool: ties on wins fall to points for, then fewest against', () => {
+	const p = { fighters: [{ id: 1, name: 'A' }, { id: 2, name: 'B' }, { id: 3, name: 'C' }, { id: 4, name: 'D' }], active: null, nextId: 5, bouts: [
+		{ id: 1, a: 1, b: 2, result: { scores: [10, 2], winner: 1 } },
+		{ id: 2, a: 3, b: 4, result: { scores: [10, 6], winner: 3 } },
+		{ id: 3, a: 1, b: 4, result: { scores: [3, 10], winner: 4 } },
+		{ id: 4, a: 3, b: 2, result: { scores: [4, 10], winner: 2 } },
+	] };
+	const t = poolStandings(p);
+	// A, B, C and D each have one win: points for decides (A 13, B 12, C 14, D 16).
+	assert.deepEqual(t.map(r => r.name), ['D', 'C', 'A', 'B']);
+});
+
+test('pool: cards follow the fighter to their next bout, and Unity records the judges\' scores', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	store.loadPoolBout(1);
+	store.giveCard(0, 'yellow');
+	const carded = s().fighters[0].poolId;
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.recordPoolBout();
+	assert.equal(s().pool.fighters.find(f => f.id === carded).cards.yellow, 1);
+	const next = s().pool.bouts.find(b => !b.result && (b.a === carded || b.b === carded));
+	store.loadPoolBout(next.id);
+	assert.equal(s().fighters.find(f => f.poolId === carded).cards.yellow, 1, 'the yellow is still there');
+
+	const u = pool(['Ana', 'Bo'], {});
+	u.store.applyPreset('unity');
+	u.store.loadPoolBout(1);
+	u.store.setTally(0, 0, 9); u.store.setTally(0, 1, 5);
+	u.store.setTally(1, 0, 8); u.store.setTally(1, 1, 6);
+	u.store.endRoundNow();
+	assert.equal(u.store.recordPoolBout(), false, 'not published yet');
+	u.store.publishTally();
+	assert.equal(u.store.recordPoolBout(), true);
+	const res = u.s().pool.bouts[0].result;
+	assert.equal(res.winner, u.s().pool.bouts[0].a);
+	assert.equal(res.scores[0] > res.scores[1], true);
+});
+
+test('pool: saves from before pools existed still load', () => {
+	const old = initialState();
+	delete old.pool;
+	assert.deepEqual(normalize(old).pool.fighters, []);
 });

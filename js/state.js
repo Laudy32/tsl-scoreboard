@@ -149,9 +149,15 @@ function fighter(color) {
 	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0, cards: noCards() };
 }
 
+function emptyPool() {
+	return { fighters: [], bouts: [], active: null, nextId: 1 };
+}
+
 export function initialState(settings = DEFAULT_SETTINGS) {
 	return {
 		version: 2,
+		/** The pool being run: fighters, the round-robin bouts and their results. Like settings, undo never rolls it back. */
+		pool: emptyPool(),
 		round: 1,
 		fighters: [fighter('blue'), fighter('red')],
 		simul: 0,
@@ -199,6 +205,7 @@ export function normalize(saved) {
 		...saved,
 		settings: { ...DEFAULT_SETTINGS, ...saved.settings, customDivisions: [...(saved.settings?.customDivisions ?? [])] },
 		fighters: [0, 1].map(i => ({ ...base.fighters[i], ...saved.fighters?.[i] })),
+		pool: { ...emptyPool(), ...saved.pool },
 	};
 }
 
@@ -250,6 +257,52 @@ export function leader(s) {
 }
 
 /** Index of the fighter who has won the match, or null. */
+/** The bout is over and has a result a pool can record: time is up, no final exchange pending, and a winner. */
+export function boutDecided(s, now = Date.now()) {
+	if (timeLeft(s, now) !== 0 || s.finalExchange || isUntimed(s)) return false;
+	if (!s.settings.liveScore && !s.tally.published) return false;
+	return leader(s) !== null;
+}
+
+/** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
+export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/**
+ * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
+ * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
+ */
+export function poolStandings(pool) {
+	const rows = new Map(pool.fighters.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
+	for (const b of pool.bouts) {
+		if (!b.result) continue;
+		const [x, y] = [rows.get(b.a), rows.get(b.b)];
+		if (!x || !y) continue;
+		const [sa, sb] = b.result.scores;
+		x.played++; y.played++;
+		x.pointsFor += sa; x.pointsAgainst += sb;
+		y.pointsFor += sb; y.pointsAgainst += sa;
+		if (b.result.winner === b.a) { x.wins++; y.losses++; }
+		else if (b.result.winner === b.b) { y.wins++; x.losses++; }
+	}
+	return [...rows.values()].sort((p, q) => q.wins - p.wins || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
+}
+
+/** Every pairing once, ordered so fighters rest between bouts (the circle method). Returns [a, b] id pairs. */
+export function roundRobin(ids) {
+	const list = [...ids];
+	if (list.length % 2) list.push(null);
+	const n = list.length;
+	const pairs = [];
+	for (let round = 0; round < n - 1; round++) {
+		for (let i = 0; i < n / 2; i++) {
+			const [a, b] = [list[i], list[n - 1 - i]];
+			if (a !== null && b !== null) pairs.push(round % 2 ? [b, a] : [a, b]);
+		}
+		list.splice(1, 0, list.pop());
+	}
+	return pairs;
+}
+
 export function matchWinner(s) {
 	const n = s.settings.playTo;
 	if (!n) return null;
@@ -325,6 +378,7 @@ export class Store {
 		}
 		// Settings changes aren't undoable, so undo never rolls them back.
 		prev.settings = this.state.settings;
+		prev.pool = this.state.pool;
 		this.state = prev;
 		this.emit();
 		return true;
@@ -791,6 +845,93 @@ export class Store {
 				if (r.winner !== null) r.winner = 1 - r.winner;
 			}
 		});
+	}
+
+	// --- pool ---
+
+	/** The pool's setup is locked once a result is recorded. */
+	#poolLocked() {
+		return this.state.pool.bouts.some(b => b.result);
+	}
+
+	addPoolFighter(name) {
+		const clean = String(name).trim().slice(0, 40);
+		return this.apply(s => {
+			if (!clean || this.#poolLocked() || s.pool.fighters.some(f => f.name.toLowerCase() === clean.toLowerCase())) return false;
+			s.pool.fighters.push({ id: s.pool.nextId++, name: clean, cards: noCards() });
+			s.pool.bouts = [];
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	removePoolFighter(id) {
+		return this.apply(s => {
+			if (this.#poolLocked() || !s.pool.fighters.some(f => f.id === id)) return false;
+			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
+			s.pool.bouts = [];
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Lays out every pairing once. */
+	buildPoolBouts() {
+		return this.apply(s => {
+			if (this.#poolLocked() || s.pool.fighters.length < 2) return false;
+			s.pool.bouts = roundRobin(s.pool.fighters.map(f => f.id)).map(([a, b], i) => ({ id: i + 1, a, b, result: null }));
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Empties the pool: fighters, bouts and results. */
+	clearPool() {
+		return this.apply(s => {
+			s.pool = emptyPool();
+		}, { undoable: false });
+	}
+
+	/** Puts a bout's two fighters on the scoreboard, with a fresh round and the cards they already carry. */
+	loadPoolBout(boutId) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === boutId);
+			if (!bout || bout.result) return false;
+			const fresh = initialState(s.settings);
+			Object.assign(s, { ...fresh, pool: s.pool });
+			[bout.a, bout.b].forEach((id, i) => {
+				const pf = s.pool.fighters.find(f => f.id === id);
+				Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+			});
+			s.pool.active = boutId;
+		}, { undoable: false });
+	}
+
+	/** Records the loaded bout's result once it is decided, and carries the cards back to the pool. */
+	recordPoolBout() {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === s.pool.active);
+			if (!bout || !boutDecided(s, this.now())) return false;
+			const ids = s.fighters.map(f => f.poolId);
+			if (!ids.includes(bout.a) || !ids.includes(bout.b)) return false;
+			const scores = boutScores(s);
+			const w = leader(s);
+			bout.result = {
+				scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
+				winner: w === null ? null : ids[w],
+			};
+			s.fighters.forEach(f => {
+				const pf = s.pool.fighters.find(x => x.id === f.poolId);
+				if (pf) pf.cards = structuredClone(f.cards);
+			});
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Takes a recorded result back, e.g. when it was entered for the wrong bout. */
+	clearPoolResult(boutId) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === boutId);
+			if (!bout?.result) return false;
+			bout.result = null;
+		}, { undoable: false });
 	}
 
 	// --- setup ---
