@@ -438,7 +438,7 @@ function renderSettings(s) {
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
 			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
-			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time up</label>
+			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate (0:30, 0:15, time up)</label>
 		</section>
 
 		<section>
@@ -509,6 +509,9 @@ render();
 
 // The clock text updates every frame without re-rendering the page.
 let wasRunning = isRunning(store.state);
+// The table calls the time at 0:30 and 0:15 (Rule 5.05); one beep, then two.
+const TIME_CALLS = [30_000, 15_000];
+let prevLeft = null;
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
@@ -519,6 +522,11 @@ function tick() {
 			el.innerHTML = clockHTML(text);
 		}
 	}
+	if (isRunning(s) && prevLeft !== null && !displayWindow && s.settings.sound && s.settings.liveScore) {
+		const call = TIME_CALLS.findIndex(ms => prevLeft > ms && left <= ms && left > 0 && s.settings.duration > ms);
+		if (call >= 0) beep(call + 1);
+	}
+	prevLeft = isRunning(s) ? left : null;
 	if (isRunning(s) && left === 0 && !displayWindow) {
 		store.expire();
 		if (s.settings.sound) alarm();
@@ -550,6 +558,27 @@ function alarm() {
 		// No audio available.
 	}
 	navigator.vibrate?.([300, 100, 300, 100, 300]);
+}
+
+/** A short tone, repeated `count` times. */
+function beep(count) {
+	try {
+		audio ??= new AudioContext();
+		const t = audio.currentTime;
+		for (let i = 0; i < count; i++) {
+			const osc = audio.createOscillator();
+			const gain = audio.createGain();
+			osc.frequency.value = 660;
+			gain.gain.setValueAtTime(0.3, t + i * 0.25);
+			gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.25 + 0.15);
+			osc.connect(gain).connect(audio.destination);
+			osc.start(t + i * 0.25);
+			osc.stop(t + i * 0.25 + 0.15);
+		}
+	} catch {
+		// No audio available.
+	}
+	navigator.vibrate?.(count > 1 ? [120, 80, 120] : [120]);
 }
 
 // Browsers only allow audio after a tap, so warm it up on the first one.
