@@ -1094,3 +1094,62 @@ test('pool: matchups entered by hand are fought in order and recorded, and more 
 	const table = poolStandings(s().pool);
 	assert.equal(table.filter(r => r.wins === 1).length, 2);
 });
+
+test('pool groups: each keeps its own matchups, fighters and standings', () => {
+	const { store, s } = setup();
+	assert.equal(store.addPoolGroup('Pool A'), true);
+	assert.equal(store.addPoolGroup('pool a'), false, 'no duplicate group names');
+	store.selectPoolGroup(s().pool.groups[0].id);
+	for (const n of ['Ana', 'Bo', 'Cy']) store.addPoolFighter(n);
+	store.buildPoolBouts();
+	assert.equal(s().pool.bouts.length, 3);
+	store.addPoolGroup('Finals');
+	store.addPoolBout('Ana', 'Dee');
+	assert.equal(s().pool.bouts.length, 4);
+	assert.equal(s().pool.bouts[3].group, s().pool.view);
+	const [a, f] = s().pool.groups;
+	assert.equal(poolStandings(s().pool, a.id).length, 3);
+	assert.deepEqual(poolStandings(s().pool, f.id).map(r => r.name).sort(), ['Ana', 'Dee']);
+	assert.equal(a.robin, true);
+	assert.equal(f.robin, false);
+});
+
+test('pool groups: Next match runs groups in the order they were made', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolGroup('Two');
+	store.addPoolBout('Cy', 'Di');
+	store.selectPoolGroup(s().pool.groups[0].id);
+	assert.equal(store.nextPoolBout().a, s().pool.fighters[0].id);
+	store.advancePool();
+	assert.equal(s().fighters[0].name, 'Ana');
+});
+
+test('pool groups: a group with results cannot be deleted, an unfought one can', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolGroup('Two');
+	store.addPoolBout('Cy', 'Di');
+	store.advancePool();
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.advancePool();
+	store.addPoolGroup('Three');
+	store.addPoolBout('Ed', 'Fy');
+	const [one, two, three] = s().pool.groups;
+	assert.equal(store.removePoolGroup(one.id), false, 'has a result');
+	assert.equal(store.removePoolGroup(two.id), false, 'on the scoreboard');
+	assert.equal(store.removePoolGroup(three.id), true);
+	assert.equal(s().pool.bouts.length, 2);
+	assert.deepEqual(s().pool.fighters.map(f => f.name), ['Ana', 'Bo', 'Cy', 'Di']);
+});
+
+test('pool groups: a pool saved before groups becomes one group', () => {
+	const old = initialState();
+	old.pool = { fighters: [{ id: 1, name: 'A', cards: {} }, { id: 2, name: 'B', cards: {} }], bouts: [{ id: 1, a: 1, b: 2, result: null }], active: null, nextId: 3, lastFinish: null };
+	const s = normalize(JSON.parse(JSON.stringify(old)));
+	assert.equal(s.pool.groups.length, 1);
+	assert.equal(s.pool.bouts[0].group, s.pool.groups[0].id);
+	assert.equal(s.pool.view, s.pool.groups[0].id);
+});

@@ -150,7 +150,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], bouts: [], active: null, nextId: 1, lastFinish: null };
+	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null };
 }
 
 export function initialState(settings = DEFAULT_SETTINGS) {
@@ -205,8 +205,21 @@ export function normalize(saved) {
 		...saved,
 		settings: { ...DEFAULT_SETTINGS, ...saved.settings, customDivisions: [...(saved.settings?.customDivisions ?? [])] },
 		fighters: [0, 1].map(i => ({ ...base.fighters[i], ...saved.fighters?.[i] })),
-		pool: { ...emptyPool(), ...saved.pool },
+		pool: normalizePool(saved.pool),
 	};
+}
+
+/** A pool saved before groups existed gets one group holding its fighters and bouts. */
+function normalizePool(saved) {
+	const pool = { ...emptyPool(), ...saved };
+	pool.groups = (pool.groups ?? []).map(g => ({ ...g, fighters: [...(g.fighters ?? [])] }));
+	if (pool.bouts.some(b => b.group == null)) {
+		let g = pool.groups[0];
+		if (!g) pool.groups.push(g = { id: 1, name: 'Pool', robin: true, fighters: pool.fighters.map(f => f.id) });
+		for (const b of pool.bouts) b.group ??= g.id;
+	}
+	if (!pool.groups.some(g => g.id === pool.view)) pool.view = pool.groups[0]?.id ?? null;
+	return pool;
 }
 
 export function timeLeft(s, now = Date.now()) {
@@ -283,10 +296,12 @@ export function restLeft(s, now = Date.now()) {
  * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
  * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
  */
-export function poolStandings(pool) {
-	const rows = new Map(pool.fighters.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
+export function poolStandings(pool, groupId = null) {
+	const group = pool.groups?.find(g => g.id === groupId);
+	const members = group ? pool.fighters.filter(f => group.fighters.includes(f.id)) : pool.fighters;
+	const rows = new Map(members.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
 	for (const b of pool.bouts) {
-		if (!b.result) continue;
+		if (!b.result || (group && b.group !== group.id)) continue;
 		const [x, y] = [rows.get(b.a), rows.get(b.b)];
 		if (!x || !y) continue;
 		const [sa, sb] = b.result.scores;
@@ -904,28 +919,91 @@ export class Store {
 		return s.pool.nextId++;
 	}
 
+	#group(s, id = s.pool.view) {
+		return s.pool.groups.find(g => g.id === id);
+	}
+
+	/** The group matchups go into: the one on view, or a new one if there is none yet. */
+	#ensureGroup(s) {
+		let g = this.#group(s);
+		if (!g) {
+			g = { id: s.pool.groups.reduce((m, x) => Math.max(m, x.id), 0) + 1, name: 'Matchups', robin: false, fighters: [] };
+			s.pool.groups.push(g);
+			s.pool.view = g.id;
+		}
+		return g;
+	}
+
+	/** Starts a named group (a pool, a round, a series) and puts it on view. */
+	addPoolGroup(name) {
+		return this.apply(s => {
+			const clean = String(name).trim().slice(0, 30);
+			if (!clean || s.pool.groups.some(g => g.name.toLowerCase() === clean.toLowerCase())) return false;
+			const id = s.pool.groups.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+			s.pool.groups.push({ id, name: clean, robin: false, fighters: [] });
+			s.pool.view = id;
+		}, { undoable: false });
+	}
+
+	selectPoolGroup(id) {
+		return this.apply(s => {
+			if (!this.#group(s, id)) return false;
+			s.pool.view = id;
+		}, { undoable: false });
+	}
+
+	/** Deletes a group and its matchups, unless one has been fought or is on the scoreboard. */
+	removePoolGroup(id) {
+		return this.apply(s => {
+			const g = this.#group(s, id);
+			const bouts = s.pool.bouts.filter(b => b.group === id);
+			if (!g || bouts.some(b => b.result || b.id === s.pool.active)) return false;
+			s.pool.bouts = s.pool.bouts.filter(b => b.group !== id);
+			s.pool.groups = s.pool.groups.filter(x => x.id !== id);
+			if (s.pool.view === id) s.pool.view = s.pool.groups[0]?.id ?? null;
+			this.#dropUnused(s);
+		}, { undoable: false });
+	}
+
+	/** Fighters in no group any more leave the pool, so their names are free again. */
+	#dropUnused(s) {
+		s.pool.fighters = s.pool.fighters.filter(f => s.pool.groups.some(g => g.fighters.includes(f.id)) || s.fighters.some(x => x.poolId === f.id));
+	}
+
+	#join(g, id) {
+		if (!g.fighters.includes(id)) g.fighters.push(id);
+	}
+
+	/** Adds a fighter to the group on view. */
 	addPoolFighter(name) {
 		return this.apply(s => {
-			const had = s.pool.fighters.length;
-			if (this.#poolFighter(s, name) === null || s.pool.fighters.length === had) return false;
+			const g = this.#ensureGroup(s);
+			const id = this.#poolFighter(s, name);
+			if (id === null || g.fighters.includes(id)) return false;
+			this.#join(g, id);
 		}, { undoable: false });
 	}
 
-	/** A fighter who is in a bout stays; remove the bouts first. */
+	/** A fighter who is in a matchup of the group stays; remove the matchups first. */
 	removePoolFighter(id) {
 		return this.apply(s => {
-			if (s.pool.bouts.some(b => b.a === id || b.b === id) || !s.pool.fighters.some(f => f.id === id)) return false;
-			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
+			const g = this.#group(s);
+			if (!g || !g.fighters.includes(id) || s.pool.bouts.some(b => b.group === g.id && (b.a === id || b.b === id))) return false;
+			g.fighters = g.fighters.filter(x => x !== id);
+			this.#dropUnused(s);
 		}, { undoable: false });
 	}
 
-	/** Adds one matchup at the end of the order, creating either fighter if the name is new. */
+	/** Adds one matchup to the group on view, creating either fighter if the name is new. */
 	addPoolBout(nameA, nameB) {
 		return this.apply(s => {
+			const g = this.#ensureGroup(s);
 			const a = this.#poolFighter(s, nameA);
 			const b = this.#poolFighter(s, nameB);
 			if (a === null || b === null || a === b) return false;
-			s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+			this.#join(g, a);
+			this.#join(g, b);
+			s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
 		}, { undoable: false });
 	}
 
@@ -938,13 +1016,17 @@ export class Store {
 		}, { undoable: false });
 	}
 
-	/** Adds every pairing of the pool's fighters that is not in the list yet (round robin). */
+	/** Adds every pairing of the group's fighters that is not in its list yet (round robin), and shows standings for it. */
 	buildPoolBouts() {
 		return this.apply(s => {
-			const have = new Set(s.pool.bouts.map(b => [b.a, b.b].sort().join('-')));
-			const missing = roundRobin(s.pool.fighters.map(f => f.id)).filter(p => !have.has([...p].sort().join('-')));
+			const g = this.#group(s);
+			if (!g) return false;
+			const mine = s.pool.bouts.filter(b => b.group === g.id);
+			const have = new Set(mine.map(b => [b.a, b.b].sort().join('-')));
+			const missing = roundRobin(g.fighters).filter(p => !have.has([...p].sort().join('-')));
 			if (!missing.length) return false;
-			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+			g.robin = true;
+			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
 		}, { undoable: false });
 	}
 
@@ -1006,7 +1088,12 @@ export class Store {
 	/** The next pool bout to fight, or null. It is only offered once the loaded bout is decided, or before any bout has started. */
 	nextPoolBout() {
 		const s = this.state;
-		const next = s.pool.bouts.find(b => !b.result && b.id !== s.pool.active);
+		// Groups run in the order they were made, matchups in the order entered.
+		let next = null;
+		for (const g of s.pool.groups) {
+			next = s.pool.bouts.find(b => b.group === g.id && !b.result && b.id !== s.pool.active);
+			if (next) break;
+		}
 		if (!next) return null;
 		if (s.pool.active !== null ? !boutDecided(s, this.now()) : hasStarted(s)) return null;
 		return next;

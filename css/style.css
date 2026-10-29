@@ -631,3 +631,4 @@ body[data-view=display] {
 .pool-actions { display: flex; gap: 6px; }
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
+.inline.matchup + .pool-bouts { margin-top: 10px; }

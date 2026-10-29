@@ -643,6 +643,7 @@ body[data-view=display] {
 .pool-actions { display: flex; gap: 6px; }
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
+.inline.matchup + .pool-bouts { margin-top: 10px; }
 </style>
 	<script type="module">
 // Scoreboard state and scoring rules. Pure logic: no DOM access here, so it
@@ -797,7 +798,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], bouts: [], active: null, nextId: 1, lastFinish: null };
+	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null };
 }
 
 function initialState(settings = DEFAULT_SETTINGS) {
@@ -852,8 +853,21 @@ function normalize(saved) {
 		...saved,
 		settings: { ...DEFAULT_SETTINGS, ...saved.settings, customDivisions: [...(saved.settings?.customDivisions ?? [])] },
 		fighters: [0, 1].map(i => ({ ...base.fighters[i], ...saved.fighters?.[i] })),
-		pool: { ...emptyPool(), ...saved.pool },
+		pool: normalizePool(saved.pool),
 	};
+}
+
+/** A pool saved before groups existed gets one group holding its fighters and bouts. */
+function normalizePool(saved) {
+	const pool = { ...emptyPool(), ...saved };
+	pool.groups = (pool.groups ?? []).map(g => ({ ...g, fighters: [...(g.fighters ?? [])] }));
+	if (pool.bouts.some(b => b.group == null)) {
+		let g = pool.groups[0];
+		if (!g) pool.groups.push(g = { id: 1, name: 'Pool', robin: true, fighters: pool.fighters.map(f => f.id) });
+		for (const b of pool.bouts) b.group ??= g.id;
+	}
+	if (!pool.groups.some(g => g.id === pool.view)) pool.view = pool.groups[0]?.id ?? null;
+	return pool;
 }
 
 function timeLeft(s, now = Date.now()) {
@@ -930,10 +944,12 @@ function restLeft(s, now = Date.now()) {
  * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
  * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
  */
-function poolStandings(pool) {
-	const rows = new Map(pool.fighters.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
+function poolStandings(pool, groupId = null) {
+	const group = pool.groups?.find(g => g.id === groupId);
+	const members = group ? pool.fighters.filter(f => group.fighters.includes(f.id)) : pool.fighters;
+	const rows = new Map(members.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
 	for (const b of pool.bouts) {
-		if (!b.result) continue;
+		if (!b.result || (group && b.group !== group.id)) continue;
 		const [x, y] = [rows.get(b.a), rows.get(b.b)];
 		if (!x || !y) continue;
 		const [sa, sb] = b.result.scores;
@@ -1551,28 +1567,91 @@ class Store {
 		return s.pool.nextId++;
 	}
 
+	#group(s, id = s.pool.view) {
+		return s.pool.groups.find(g => g.id === id);
+	}
+
+	/** The group matchups go into: the one on view, or a new one if there is none yet. */
+	#ensureGroup(s) {
+		let g = this.#group(s);
+		if (!g) {
+			g = { id: s.pool.groups.reduce((m, x) => Math.max(m, x.id), 0) + 1, name: 'Matchups', robin: false, fighters: [] };
+			s.pool.groups.push(g);
+			s.pool.view = g.id;
+		}
+		return g;
+	}
+
+	/** Starts a named group (a pool, a round, a series) and puts it on view. */
+	addPoolGroup(name) {
+		return this.apply(s => {
+			const clean = String(name).trim().slice(0, 30);
+			if (!clean || s.pool.groups.some(g => g.name.toLowerCase() === clean.toLowerCase())) return false;
+			const id = s.pool.groups.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+			s.pool.groups.push({ id, name: clean, robin: false, fighters: [] });
+			s.pool.view = id;
+		}, { undoable: false });
+	}
+
+	selectPoolGroup(id) {
+		return this.apply(s => {
+			if (!this.#group(s, id)) return false;
+			s.pool.view = id;
+		}, { undoable: false });
+	}
+
+	/** Deletes a group and its matchups, unless one has been fought or is on the scoreboard. */
+	removePoolGroup(id) {
+		return this.apply(s => {
+			const g = this.#group(s, id);
+			const bouts = s.pool.bouts.filter(b => b.group === id);
+			if (!g || bouts.some(b => b.result || b.id === s.pool.active)) return false;
+			s.pool.bouts = s.pool.bouts.filter(b => b.group !== id);
+			s.pool.groups = s.pool.groups.filter(x => x.id !== id);
+			if (s.pool.view === id) s.pool.view = s.pool.groups[0]?.id ?? null;
+			this.#dropUnused(s);
+		}, { undoable: false });
+	}
+
+	/** Fighters in no group any more leave the pool, so their names are free again. */
+	#dropUnused(s) {
+		s.pool.fighters = s.pool.fighters.filter(f => s.pool.groups.some(g => g.fighters.includes(f.id)) || s.fighters.some(x => x.poolId === f.id));
+	}
+
+	#join(g, id) {
+		if (!g.fighters.includes(id)) g.fighters.push(id);
+	}
+
+	/** Adds a fighter to the group on view. */
 	addPoolFighter(name) {
 		return this.apply(s => {
-			const had = s.pool.fighters.length;
-			if (this.#poolFighter(s, name) === null || s.pool.fighters.length === had) return false;
+			const g = this.#ensureGroup(s);
+			const id = this.#poolFighter(s, name);
+			if (id === null || g.fighters.includes(id)) return false;
+			this.#join(g, id);
 		}, { undoable: false });
 	}
 
-	/** A fighter who is in a bout stays; remove the bouts first. */
+	/** A fighter who is in a matchup of the group stays; remove the matchups first. */
 	removePoolFighter(id) {
 		return this.apply(s => {
-			if (s.pool.bouts.some(b => b.a === id || b.b === id) || !s.pool.fighters.some(f => f.id === id)) return false;
-			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
+			const g = this.#group(s);
+			if (!g || !g.fighters.includes(id) || s.pool.bouts.some(b => b.group === g.id && (b.a === id || b.b === id))) return false;
+			g.fighters = g.fighters.filter(x => x !== id);
+			this.#dropUnused(s);
 		}, { undoable: false });
 	}
 
-	/** Adds one matchup at the end of the order, creating either fighter if the name is new. */
+	/** Adds one matchup to the group on view, creating either fighter if the name is new. */
 	addPoolBout(nameA, nameB) {
 		return this.apply(s => {
+			const g = this.#ensureGroup(s);
 			const a = this.#poolFighter(s, nameA);
 			const b = this.#poolFighter(s, nameB);
 			if (a === null || b === null || a === b) return false;
-			s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+			this.#join(g, a);
+			this.#join(g, b);
+			s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
 		}, { undoable: false });
 	}
 
@@ -1585,13 +1664,17 @@ class Store {
 		}, { undoable: false });
 	}
 
-	/** Adds every pairing of the pool's fighters that is not in the list yet (round robin). */
+	/** Adds every pairing of the group's fighters that is not in its list yet (round robin), and shows standings for it. */
 	buildPoolBouts() {
 		return this.apply(s => {
-			const have = new Set(s.pool.bouts.map(b => [b.a, b.b].sort().join('-')));
-			const missing = roundRobin(s.pool.fighters.map(f => f.id)).filter(p => !have.has([...p].sort().join('-')));
+			const g = this.#group(s);
+			if (!g) return false;
+			const mine = s.pool.bouts.filter(b => b.group === g.id);
+			const have = new Set(mine.map(b => [b.a, b.b].sort().join('-')));
+			const missing = roundRobin(g.fighters).filter(p => !have.has([...p].sort().join('-')));
 			if (!missing.length) return false;
-			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), a, b, result: null });
+			g.robin = true;
+			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
 		}, { undoable: false });
 	}
 
@@ -1653,7 +1736,12 @@ class Store {
 	/** The next pool bout to fight, or null. It is only offered once the loaded bout is decided, or before any bout has started. */
 	nextPoolBout() {
 		const s = this.state;
-		const next = s.pool.bouts.find(b => !b.result && b.id !== s.pool.active);
+		// Groups run in the order they were made, matchups in the order entered.
+		let next = null;
+		for (const g of s.pool.groups) {
+			next = s.pool.bouts.find(b => b.group === g.id && !b.result && b.id !== s.pool.active);
+			if (next) break;
+		}
 		if (!next) return null;
 		if (s.pool.active !== null ? !boutDecided(s, this.now()) : hasStarted(s)) return null;
 		return next;
@@ -2200,7 +2288,7 @@ function renderControl(s) {
 			${matchWinner(s) !== null || (!usesRounds(s) && !store.nextPoolBout() && boutDecided(s)) ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
-		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Pool</button></div>
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Matchups</button></div>
 		${s.pool.active !== null && boutDecided(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
 		${cardPanel(s)}
 		<details class="help">
@@ -2378,36 +2466,46 @@ function renderHistory(s) {
 
 function renderPool(s) {
 	const p = s.pool;
+	const g = p.groups.find(x => x.id === p.view);
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
-	const inBout = f => p.bouts.some(b => b.a === f.id || b.b === f.id);
-	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
-	const bouts = p.bouts.map(b => {
-		const r = b.result;
-		const status = r
-			? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
-			: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
-				: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
-		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
-	}).join('');
-	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
-	return `<form method="dialog" class="sheet-body">
-		<header class="sheet-head"><h2>Pool</h2><button class="btn small" value="close">Done</button></header>
-		<section>
-			<h3>Fighters</h3>
-			<div class="chips">${chips}</div>
-			<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>
-		</section>
-		<section>
-			<h3>Bouts</h3>
-			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
+	const tabs = p.groups.map(x => `<span class="chip${x.id === g?.id ? ' on' : ''}"><button type="button" data-action="pool-group" data-id="${x.id}">${esc(x.name)}</button></span>`).join('');
+	const groupAdd = `<span class="inline"><input id="pool-group-name" maxlength="30" placeholder="${g ? 'New group' : 'Group name'}" autocomplete="off" /><button type="button" class="btn small" data-action="pool-group-add">${g ? 'New' : 'Create'}</button></span>`;
+	let body = '';
+	if (g) {
+		const mine = p.bouts.filter(b => b.group === g.id);
+		const members = p.fighters.filter(f => g.fighters.includes(f.id));
+		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
+		const chips = members.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const bouts = mine.map(b => {
+			const r = b.result;
+			const status = r
+				? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
+				: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
+					: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
+			return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
+		}).join('');
+		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+		body = `<section>
+			<h3>${esc(g.name)}</h3>
 			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
-			${p.fighters.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
+			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
+			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
 		</section>
-		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
-		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
+		${members.length ? `<section><h3>Fighters</h3><div class="chips">${chips}</div></section>` : ''}
+		${g.robin ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
+		${mine.some(b => b.result || b.id === p.active) ? '' : `<div class="row"><button type="button" class="btn danger" data-action="pool-group-remove" data-id="${g.id}">Delete ${esc(g.name)}</button></div>`}`;
+	}
+	return `<form method="dialog" class="sheet-body">
+		<header class="sheet-head"><h2>Matchups</h2><button class="btn small" value="close">Done</button></header>
+		<section>
+			${tabs ? `<div class="chips">${tabs}</div>` : ''}
+			${groupAdd}
+		</section>
+		${body}
+		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
 
@@ -2692,12 +2790,20 @@ const actions = {
 		refreshPool();
 		poolDialog.showModal();
 	},
-	'pool-add': () => {
-		const input = $('#pool-name');
-		if (store.addPoolFighter(input.value)) {
-			refreshPool();
-			$('#pool-name').focus();
-		}
+	'pool-group': el => {
+		store.selectPoolGroup(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-group-add': () => {
+		if (!store.addPoolGroup($('#pool-group-name').value)) return;
+		refreshPool();
+		$('#pool-a')?.focus();
+	},
+	'pool-group-remove': async el => {
+		const g = store.state.pool.groups.find(x => x.id === +el.dataset.id);
+		if (!g || !await confirmAction(`Delete ${g.name} and its matchups?`, 'Delete')) return;
+		store.removePoolGroup(g.id);
+		refreshPool();
 	},
 	'pool-remove': el => {
 		store.removePoolFighter(+el.dataset.id);
@@ -2728,7 +2834,7 @@ const actions = {
 		refreshPool();
 	},
 	'pool-clear': async () => {
-		if (!await confirmAction('Clear the pool? Its fighters, bouts and results are removed.', 'Clear pool')) return;
+		if (!await confirmAction('Clear every group, matchup and result?', 'Clear all')) return;
 		store.clearPool();
 		refreshPool();
 	},
@@ -2870,9 +2976,9 @@ settingsDialog.addEventListener('change', e => {
 });
 poolDialog.addEventListener('keydown', e => {
 	if (e.key !== 'Enter') return;
-	if (e.target.id === 'pool-name') {
+	if (e.target.id === 'pool-group-name') {
 		e.preventDefault();
-		actions['pool-add']();
+		actions['pool-group-add']();
 	} else if (e.target.id === 'pool-a' || e.target.id === 'pool-b') {
 		e.preventDefault();
 		if (e.target.id === 'pool-a' && !$('#pool-b').value) $('#pool-b').focus();

@@ -37,7 +37,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   switch-sides call at half the winning score, a 3:00 medical hold and a
   no-show (0–10) from the Penalty sheet
 - Total Bout Time match type, and an attempt clock for sudden deaths over 30s
-- Pool: enter matchups one by one (single elimination, Swiss, or any order) or add
+- Matchups: make named groups (Pool A, Round 1, a series), enter matchups one by one (single elimination, Swiss, or any order) or add
   every pairing for a round robin, then fight them in order. The Next match
   button records the finished bout and loads the next fighters. Standings rank
   by wins, then points for, then fewest against, with a 60 second rest when a
