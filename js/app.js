@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -83,14 +83,14 @@ function cardPanel(s) {
 	const pick = (key, value, label, extra = '', style = '') =>
 		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
 	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
-	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c]));
-	const reasons = CARD_REASONS.map(r => pick('reason', r, esc(r)));
+	const cards = [...['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c])), pick('card', 'no-show', 'No-show')];
+	const reasons = card === 'no-show' ? [] : CARD_REASONS.map(r => pick('reason', r, esc(r)));
 	return `<section class="penalty-sheet">
 		<h3>Penalty</h3>
 		<div class="pills">${fighters.join('')}</div>
 		<div class="pills">${cards.join('')}</div>
-		<div class="pills">${reasons.join('')}</div>
-		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card ? `Give ${card} card` : 'Give card'}</button></div>
+		${reasons.length ? `<div class="pills">${reasons.join('')}</div>` : ''}
+		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card === 'no-show' ? 'Record no-show' : card ? `Give ${card} card` : 'Give card'}</button></div>
 	</section>`;
 }
 
@@ -112,7 +112,7 @@ function statusLine(s) {
 		// A decision by the judges names its kind; a sudden-death winner is just listed.
 		const kind = !s.settings.liveScore && s.tally.tieWinner === null
 			? `<div class="status-sub">${DECISION_LABELS[decisionOf(s.tally.votes)]}</div>` : '';
-		const forfeit = s.forfeit !== null ? '<div class="status-sub">Forfeit</div>' : '';
+		const forfeit = s.forfeit !== null ? `<div class="status-sub">${s.noShow ? 'No-show' : 'Forfeit'}</div>` : '';
 		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${forfeit || kind}`;
 	}
 	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
@@ -163,7 +163,7 @@ function primaryButton(s) {
 	if (isUntimed(s)) return '';
 	// A fresh sudden death starts rather than resumes.
 	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
-	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
+	return `<button class="btn primary go" data-action="clock" ${s.medical ? 'disabled' : ''}>${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
 }
 
 /** During the final exchange, the one thing the table can't guess: a one-point gap needs a point. */
@@ -178,7 +178,41 @@ function switchText(s) {
 	return [0, 1].map(i => `${esc(fighterLabel(s, i))} ${stayed[i] ? 'stays (−1)' : 'switches'}`).join(' · ');
 }
 
+const medicalText = s => formatClock(medicalLeft(s), { hundredths: false });
+
+function attemptPanel(s) {
+	const left = attemptLeft(s);
+	if (left === null) return '';
+	return `<div class="switch-call attempt${left === 0 ? ' late' : ''}">
+		<div class="switch-title">${left === 0 ? 'No attempt yet' : 'Attempt to score'} <span data-attempt>${formatClock(left, { hundredths: false })}</span></div>
+		<div class="row"><button class="btn" data-action="attempt">Attempt made</button></div>
+	</div>`;
+}
+
+const restText = r => formatClock(r.left, { hundredths: false });
+const restNames = (s, r) => r.ids.map(id => esc(s.pool.fighters.find(f => f.id === id)?.name ?? '')).join(' and ');
+
+function restPanel(s) {
+	const r = restLeft(s);
+	if (!r) return '';
+	return `<div class="switch-call rest"><div class="switch-title">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div></div>`;
+}
+
+function medicalPanel(s) {
+	if (!s.medical) return '';
+	return `<div class="switch-call medical">
+		<div class="switch-title">Medical hold <span data-medical>${medicalText(s)}</span></div>
+		<div class="row"><button class="btn" data-action="medical-end">End hold</button></div>
+	</div>`;
+}
+
 function switchPanel(s) {
+	if (s.sidesDue) {
+		return `<div class="switch-call">
+		<div class="switch-title">Switch sides</div>
+		<div class="row"><button class="btn" data-action="swap">Swap on screen</button><button class="btn" data-action="sides-done">Done</button></div>
+	</div>`;
+	}
 	if (!s.tagSwitch) return '';
 	const stayButton = i => (s.tagSwitch.stayed[i]
 		? `<span class="stayed" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))} stays</span>`
@@ -286,6 +320,9 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
+		${restPanel(s)}
+		${attemptPanel(s)}
+		${medicalPanel(s)}
 		${switchPanel(s)}
 		${tallyPanel(s)}
 		<div class="actions">
@@ -299,7 +336,8 @@ function renderControl(s) {
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
-		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button></div>
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Pool</button></div>
+		${s.pool.active !== null && boutDecided(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
 		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
@@ -336,7 +374,8 @@ function renderDisplay(s) {
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
-			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : ''}
+			${(() => { const r = restLeft(s); return r ? `<div class="d-switch">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div>` : ''; })()}
+			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -438,7 +477,7 @@ function renderSettings(s) {
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
 			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
-			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time up</label>
+			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time calls and time up</label>
 		</section>
 
 		<section>
@@ -473,11 +512,46 @@ function renderHistory(s) {
 	</form>`;
 }
 
+function renderPool(s) {
+	const p = s.pool;
+	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
+	const locked = p.bouts.some(b => b.result);
+	const chips = p.fighters.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}</span>${locked ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+	const bouts = p.bouts.map(b => {
+		const r = b.result;
+		const status = r
+			? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
+			: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
+				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
+		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
+	}).join('');
+	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td class="num">${r.wins}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+	return `<form method="dialog" class="sheet-body">
+		<header class="sheet-head"><h2>Pool</h2><button class="btn small" value="close">Done</button></header>
+		<section>
+			<h3>Fighters</h3>
+			<div class="chips">${chips}</div>
+			${locked ? '' : `<span class="inline"><input id="pool-name" maxlength="40" placeholder="Name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-add">Add</button></span>`}
+			${!locked && p.fighters.length > 1 ? `<div class="row"><button type="button" class="btn" data-action="pool-build">${p.bouts.length ? 'Rebuild bouts' : 'Build bouts'}</button></div>` : ''}
+		</section>
+		${bouts ? `<section><h3>Bouts</h3><ul class="pool-bouts">${bouts}</ul></section>` : ''}
+		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">For</th><th class="num">Against</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
+		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
+	</form>`;
+}
+
+function refreshPool() {
+	const top = poolDialog.scrollTop;
+	poolDialog.innerHTML = renderPool(store.state);
+	poolDialog.scrollTop = top;
+}
+
 // --- rendering ---
 
 const app = $('#app');
 const settingsDialog = $('#settings');
 const historyDialog = $('#history');
+const poolDialog = $('#pool');
 
 // A judge's number is committed on change; rebuilding the page then would
 // drop focus from the next field, so just refresh the totals and Publish.
@@ -509,6 +583,11 @@ render();
 
 // The clock text updates every frame without re-rendering the page.
 let wasRunning = isRunning(store.state);
+// The table calls the time twice (Rules 5.04, 5.05); one beep, then two.
+const timeCalls = s => [s.settings.timeCallsAt, s.settings.timeCallsAt / 2];
+let prevLeft = null;
+let lateAttempt = false;
+let restingNow = false;
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
@@ -519,6 +598,32 @@ function tick() {
 			el.innerHTML = clockHTML(text);
 		}
 	}
+	if (s.suddenDeath) {
+		const al = attemptLeft(s);
+		const atext = al === null ? '' : formatClock(al, { hundredths: false });
+		for (const el of document.querySelectorAll('[data-attempt]')) if (el.textContent !== atext) el.textContent = atext;
+		// The panel changes its wording at zero; rebuild once when that happens.
+		const late = al === 0;
+		if (late !== lateAttempt) { lateAttempt = late; if (late) render(); }
+	} else lateAttempt = false;
+	if (s.pool.active !== null) {
+		const r = restLeft(s);
+		const rtext = r ? restText(r) : '';
+		for (const el of document.querySelectorAll('[data-rest]')) if (el.textContent !== rtext) el.textContent = rtext;
+		// The rest ends by itself; redraw once so the line goes away.
+		const resting = !!r;
+		if (restingNow && !resting) render();
+		restingNow = resting;
+	} else restingNow = false;
+	if (s.medical) {
+		const mtext = medicalText(s);
+		for (const el of document.querySelectorAll('[data-medical]')) if (el.textContent !== mtext) el.textContent = mtext;
+	}
+	if (isRunning(s) && prevLeft !== null && !displayWindow && s.settings.sound && s.settings.liveScore) {
+		const call = timeCalls(s).findIndex(ms => prevLeft > ms && left <= ms && left > 0 && s.settings.duration > ms);
+		if (call >= 0) beep(call + 1);
+	}
+	prevLeft = isRunning(s) ? left : null;
 	if (isRunning(s) && left === 0 && !displayWindow) {
 		store.expire();
 		if (s.settings.sound) alarm();
@@ -550,6 +655,27 @@ function alarm() {
 		// No audio available.
 	}
 	navigator.vibrate?.([300, 100, 300, 100, 300]);
+}
+
+/** A short tone, repeated `count` times. */
+function beep(count) {
+	try {
+		audio ??= new AudioContext();
+		const t = audio.currentTime;
+		for (let i = 0; i < count; i++) {
+			const osc = audio.createOscillator();
+			const gain = audio.createGain();
+			osc.frequency.value = 660;
+			gain.gain.setValueAtTime(0.3, t + i * 0.25);
+			gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.25 + 0.15);
+			osc.connect(gain).connect(audio.destination);
+			osc.start(t + i * 0.25);
+			osc.stop(t + i * 0.25 + 0.15);
+		}
+	} catch {
+		// No audio available.
+	}
+	navigator.vibrate?.(count > 1 ? [120, 80, 120] : [120]);
 }
 
 // Browsers only allow audio after a tap, so warm it up on the first one.
@@ -658,6 +784,12 @@ const actions = {
 	},
 	'penalty-give': async () => {
 		const { side, card, reason } = penalty;
+		if (card === 'no-show') {
+			if (!await confirmAction(`${fighterLabel(store.state, side)} did not show? The bout ends as a 0–10 loss. You can undo this.`, 'No-show')) return;
+			penalty = null;
+			store.noShow(side);
+			return;
+		}
 		if (card === 'black' && !await confirmAction(`Black card for ${fighterLabel(store.state, side)}? The bout is forfeited and the clock stops. You can undo this.`, 'Black card')) return;
 		penalty = null;
 		if (!store.giveCard(side, card, reason)) render();
@@ -678,6 +810,45 @@ const actions = {
 	'tie-winner': el => store.setTieWinner(+el.dataset.side),
 	stay: el => store.stay(+el.dataset.side),
 	'switch-done': () => store.switchDone(),
+	'sides-done': () => store.sidesDone(),
+	attempt: () => store.attempt(),
+	pool: () => {
+		refreshPool();
+		poolDialog.showModal();
+	},
+	'pool-add': () => {
+		const input = $('#pool-name');
+		if (store.addPoolFighter(input.value)) {
+			refreshPool();
+			$('#pool-name').focus();
+		}
+	},
+	'pool-remove': el => {
+		store.removePoolFighter(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-build': () => {
+		store.buildPoolBouts();
+		refreshPool();
+	},
+	'pool-load': async el => {
+		if (hasStarted(store.state) && matchWinner(store.state) === null && !boutDecided(store.state) &&
+			!await confirmAction('Load this bout? The current scores and clock are replaced.', 'Load bout')) return;
+		store.loadPoolBout(+el.dataset.id);
+		poolDialog.close();
+	},
+	'pool-record': () => store.recordPoolBout(),
+	'pool-undo': el => {
+		store.clearPoolResult(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-clear': async () => {
+		if (!await confirmAction('Clear the pool? Its fighters, bouts and results are removed.', 'Clear pool')) return;
+		store.clearPool();
+		refreshPool();
+	},
+	medical: () => store.startMedical(),
+	'medical-end': () => store.endMedical(),
 	duration: el => {
 		store.updateSettings({ duration: +el.dataset.ms });
 		refreshSettings();
@@ -811,6 +982,13 @@ settingsDialog.addEventListener('change', e => {
 		$('#presets').innerHTML = presetsHTML(store.state.settings);
 	}
 });
+poolDialog.addEventListener('keydown', e => {
+	if (e.key === 'Enter' && e.target.id === 'pool-name') {
+		e.preventDefault();
+		actions['pool-add']();
+	}
+});
+
 settingsDialog.addEventListener('keydown', e => {
 	if (e.key === 'Enter' && e.target.id === 'time-left') {
 		e.preventDefault();

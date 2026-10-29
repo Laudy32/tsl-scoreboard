@@ -33,13 +33,17 @@ export const DEFAULT_SETTINGS = {
 	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
 	 */
 	finalExchange: true,
+	/** The table's first time call; the second is half of it. 30s for Guaranteed Fight Time (0:30, 0:15), 60s for Total Bout Time (1:00, 0:30). */
+	timeCallsAt: 30_000,
 	sound: true,
 };
 
 /** Quick setups for the usual match types. Each sets only the rules it lists. */
 export const MATCH_PRESETS = [
-	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true, finalExchange: true, timeCallsAt: 30_000 } },
+	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true, finalExchange: true, timeCallsAt: 30_000 } },
+	// The original method (5.04): holds don't stop the clock, so there is no final exchange; calls at 1:00 and 0:30.
+	{ id: 'total-bout', label: 'Total Bout Time', note: '5:00, first to 10', settings: { duration: 300_000, tiebreakerDuration: 60_000, pointsToWin: 10, liveScore: true, finalExchange: false, timeCallsAt: 60_000 } },
 	{
 		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
 		settings: { duration: 60_000, tiebreakerDuration: 0, pointsToWin: 0, liveScore: false },
@@ -59,6 +63,8 @@ export const CS_ROUNDS_TO_WIN = 2;
 export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
 
 /** In Tag Team a simul makes both teams switch fighters instead of costing points (Rules 8.04). */
+/** The score recorded for a no-show when no winning score is set. */
+const NO_SHOW_SCORE = 10;
 export const TAG_TEAM_DIVISION = 'Tag Team';
 export const isTagTeam = s => s.settings.division === TAG_TEAM_DIVISION;
 
@@ -143,21 +149,36 @@ function fighter(color) {
 	return { name: COLORS[color].label, subtitle: '', color, score: 0, wins: 0, cards: noCards() };
 }
 
+function emptyPool() {
+	return { fighters: [], bouts: [], active: null, nextId: 1, lastFinish: null };
+}
+
 export function initialState(settings = DEFAULT_SETTINGS) {
 	return {
 		version: 2,
+		/** The pool being run: fighters, the round-robin bouts and their results. Like settings, undo never rolls it back. */
+		pool: emptyPool(),
 		round: 1,
 		fighters: [fighter('blue'), fighter('red')],
 		simul: 0,
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
-		/** Side that took a black card and forfeits the bout, or null. */
+		/** Side that took a black card (or didn't show) and forfeits the bout, or null. */
 		forfeit: null,
+		/** The forfeit was a no-show. */
+		noShow: false,
 		/** Time is up but the last exchange is still being fought. */
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
 		tally: emptyTally(),
+		/** Sudden death: the table saw an attempt to score, so the attempt clock is cleared. */
+		attemptMade: false,
+		/** An injured fighter's medical hold, counted down beside the paused bout clock: { startedAt }, or null (3.05-5). */
+		medical: null,
+		/** Fighters switch corners when the first reaches half the winning score (5.12): the call was made, and is waiting to be cleared. */
+		sidesCalled: false,
+		sidesDue: false,
 		/** Tag Team, after a simul: which teams paid a point to keep their fighter in. Null when no switch is due. */
 		tagSwitch: null,
 		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
@@ -184,6 +205,7 @@ export function normalize(saved) {
 		...saved,
 		settings: { ...DEFAULT_SETTINGS, ...saved.settings, customDivisions: [...(saved.settings?.customDivisions ?? [])] },
 		fighters: [0, 1].map(i => ({ ...base.fighters[i], ...saved.fighters?.[i] })),
+		pool: { ...emptyPool(), ...saved.pool },
 	};
 }
 
@@ -191,6 +213,22 @@ export function timeLeft(s, now = Date.now()) {
 	const elapsed = s.startedAt === null ? 0 : now - s.startedAt;
 	return Math.max(s.remaining - elapsed, 0);
 }
+
+/** A timed sudden death longer than this needs an attempt to score in its first 30 seconds (Rule 5.04-6). */
+export const ATTEMPT_WINDOW = 30_000;
+
+/** Time left to attempt a score in sudden death, or null when no attempt is being asked for. */
+export function attemptLeft(s, now = Date.now()) {
+	const long = s.settings.tiebreakerDuration > ATTEMPT_WINDOW;
+	if (!s.suddenDeath || s.attemptMade || !long || !s.settings.liveScore || leader(s) !== null || s.forfeit !== null) return null;
+	const left = timeLeft(s, now);
+	if (left === 0 && !isRunning(s) && s.remaining === 0) return null;
+	return Math.max(left - (s.settings.tiebreakerDuration - ATTEMPT_WINDOW), 0);
+}
+
+/** Length of the medical hold (Rule 3.05-5). */
+export const MEDICAL_HOLD = 180_000;
+export const medicalLeft = (s, now = Date.now()) => (s.medical ? Math.max(MEDICAL_HOLD - (now - s.medical.startedAt), 0) : 0);
 
 export const isRunning = s => s.startedAt !== null;
 
@@ -219,6 +257,64 @@ export function leader(s) {
 }
 
 /** Index of the fighter who has won the match, or null. */
+/** The bout is over and has a result a pool can record: time is up, no final exchange pending, and a winner. */
+export function boutDecided(s, now = Date.now()) {
+	if (timeLeft(s, now) !== 0 || s.finalExchange || isUntimed(s)) return false;
+	if (!s.settings.liveScore && !s.tally.published) return false;
+	return leader(s) !== null;
+}
+
+/** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
+export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/** A fighter who fights back to back gets this long to rest. */
+export const REST_TIME = 60_000;
+
+/** Pool bout is loaded and a fighter in it just fought: the fighters resting and the time left, or null. */
+export function restLeft(s, now = Date.now()) {
+	const last = s.pool.lastFinish;
+	if (s.pool.active === null || !last || hasStarted(s)) return null;
+	const ids = s.fighters.map(f => f.poolId).filter(id => last.ids.includes(id));
+	const left = Math.max(REST_TIME - (now - last.at), 0);
+	return ids.length && left > 0 ? { ids, left } : null;
+}
+
+/**
+ * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
+ * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
+ */
+export function poolStandings(pool) {
+	const rows = new Map(pool.fighters.map(f => [f.id, { id: f.id, name: f.name, played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 }]));
+	for (const b of pool.bouts) {
+		if (!b.result) continue;
+		const [x, y] = [rows.get(b.a), rows.get(b.b)];
+		if (!x || !y) continue;
+		const [sa, sb] = b.result.scores;
+		x.played++; y.played++;
+		x.pointsFor += sa; x.pointsAgainst += sb;
+		y.pointsFor += sb; y.pointsAgainst += sa;
+		if (b.result.winner === b.a) { x.wins++; y.losses++; }
+		else if (b.result.winner === b.b) { y.wins++; x.losses++; }
+	}
+	return [...rows.values()].sort((p, q) => q.wins - p.wins || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
+}
+
+/** Every pairing once, ordered so fighters rest between bouts (the circle method). Returns [a, b] id pairs. */
+export function roundRobin(ids) {
+	const list = [...ids];
+	if (list.length % 2) list.push(null);
+	const n = list.length;
+	const pairs = [];
+	for (let round = 0; round < n - 1; round++) {
+		for (let i = 0; i < n / 2; i++) {
+			const [a, b] = [list[i], list[n - 1 - i]];
+			if (a !== null && b !== null) pairs.push(round % 2 ? [b, a] : [a, b]);
+		}
+		list.splice(1, 0, list.pop());
+	}
+	return pairs;
+}
+
 export function matchWinner(s) {
 	const n = s.settings.playTo;
 	if (!n) return null;
@@ -294,6 +390,7 @@ export class Store {
 		}
 		// Settings changes aren't undoable, so undo never rolls them back.
 		prev.settings = this.state.settings;
+		prev.pool = this.state.pool;
 		this.state = prev;
 		this.emit();
 		return true;
@@ -303,7 +400,7 @@ export class Store {
 
 	start() {
 		return this.apply(s => {
-			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s)) return false;
+			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s) || s.medical) return false;
 			s.startedAt = this.now();
 			// Fighting again means any fighter switch has been made.
 			s.tagSwitch = null;
@@ -315,6 +412,32 @@ export class Store {
 			if (!isRunning(s)) return false;
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
+		}, { undoable: false });
+	}
+
+	/** The table saw an attempt to score, so sudden death goes on without the warning. */
+	attempt() {
+		return this.apply(s => {
+			if (!s.suddenDeath || s.attemptMade) return false;
+			s.attemptMade = true;
+		}, { undoable: false });
+	}
+
+	/** Pauses the bout and starts the medical hold. */
+	startMedical() {
+		return this.apply(s => {
+			if (s.medical) return false;
+			if (isRunning(s)) s.remaining = timeLeft(s, this.now());
+			s.startedAt = null;
+			s.medical = { startedAt: this.now() };
+		}, { undoable: false });
+	}
+
+	/** The fighter is ready (or out); the bout clock can start again. */
+	endMedical() {
+		return this.apply(s => {
+			if (!s.medical) return false;
+			s.medical = null;
 		}, { undoable: false });
 	}
 
@@ -402,6 +525,14 @@ export class Store {
 			s.startedAt = null;
 		}
 		if (timeLeft(s, this.now()) === 0 && !s.finalExchange) s.showWinner = true;
+		// Corners switch once per round at half the target. Tag Team has its own switches.
+		const half = Math.ceil(target / 2);
+		if (target && !s.sidesCalled && !s.suddenDeath && !isTagTeam(s) && s.remaining > 0 &&
+			s.fighters.some(f => f.score >= half && f.score < target)) {
+			s.sidesCalled = true;
+			s.sidesDue = true;
+			this.#logEvent(s, 'switch-sides');
+		}
 		if (s.settings.pauseAfterScoring && isRunning(s)) {
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
@@ -468,6 +599,14 @@ export class Store {
 	}
 
 	/** The fighters have switched; clear the call from the screens. */
+	/** The corners switch was handled (or skipped); clear the call from the screens. */
+	sidesDone() {
+		return this.apply(s => {
+			if (!s.sidesDue) return false;
+			s.sidesDue = false;
+		}, { undoable: false });
+	}
+
 	switchDone() {
 		return this.apply(s => {
 			if (!s.tagSwitch) return false;
@@ -583,6 +722,26 @@ export class Store {
 		}, { clock: card === 'black' });
 	}
 
+	/** The fighter didn't show: a 0–10 loss and the bout is over (Rule 5.06). */
+	noShow(side) {
+		return this.apply(s => {
+			if (s.forfeit !== null) return false;
+			s.forfeit = side;
+			s.noShow = true;
+			if (s.settings.liveScore) {
+				s.fighters[side].score = 0;
+				s.fighters[1 - side].score = s.settings.pointsToWin || NO_SHOW_SCORE;
+			}
+			s.remaining = 0;
+			s.startedAt = null;
+			s.finalExchange = false;
+			s.sidesDue = false;
+			s.tagSwitch = null;
+			s.showWinner = true;
+			this.#logEvent(s, 'no-show', { side });
+		}, { clock: true });
+	}
+
 	/** Clears a fighter's cards, e.g. for a new event or a different fighter. */
 	clearCards(side) {
 		return this.apply(s => {
@@ -619,6 +778,7 @@ export class Store {
 		return this.apply(s => {
 			if (action === 'tiebreaker') {
 				s.suddenDeath = true;
+				s.attemptMade = false;
 				// An untimed sudden death keeps a token sliver on the clock so the round isn't "over" until a winner is named.
 				s.remaining = s.settings.tiebreakerDuration || UNTIMED_REMAINING;
 				s.startedAt = null;
@@ -647,8 +807,13 @@ export class Store {
 		s.simulPenalties = [];
 		s.suddenDeath = false;
 		s.forfeit = null;
+		s.noShow = false;
 		s.finalExchange = false;
 		s.tagSwitch = null;
+		s.sidesCalled = false;
+		s.sidesDue = false;
+		s.medical = null;
+		s.attemptMade = false;
 		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
@@ -676,6 +841,7 @@ export class Store {
 
 	swapSides() {
 		return this.apply(s => {
+			s.sidesDue = false;
 			s.fighters.reverse();
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
 			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
@@ -691,6 +857,94 @@ export class Store {
 				if (r.winner !== null) r.winner = 1 - r.winner;
 			}
 		});
+	}
+
+	// --- pool ---
+
+	/** The pool's setup is locked once a result is recorded. */
+	#poolLocked() {
+		return this.state.pool.bouts.some(b => b.result);
+	}
+
+	addPoolFighter(name) {
+		const clean = String(name).trim().slice(0, 40);
+		return this.apply(s => {
+			if (!clean || this.#poolLocked() || s.pool.fighters.some(f => f.name.toLowerCase() === clean.toLowerCase())) return false;
+			s.pool.fighters.push({ id: s.pool.nextId++, name: clean, cards: noCards() });
+			s.pool.bouts = [];
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	removePoolFighter(id) {
+		return this.apply(s => {
+			if (this.#poolLocked() || !s.pool.fighters.some(f => f.id === id)) return false;
+			s.pool.fighters = s.pool.fighters.filter(f => f.id !== id);
+			s.pool.bouts = [];
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Lays out every pairing once. */
+	buildPoolBouts() {
+		return this.apply(s => {
+			if (this.#poolLocked() || s.pool.fighters.length < 2) return false;
+			s.pool.bouts = roundRobin(s.pool.fighters.map(f => f.id)).map(([a, b], i) => ({ id: i + 1, a, b, result: null }));
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Empties the pool: fighters, bouts and results. */
+	clearPool() {
+		return this.apply(s => {
+			s.pool = emptyPool();
+		}, { undoable: false });
+	}
+
+	/** Puts a bout's two fighters on the scoreboard, with a fresh round and the cards they already carry. */
+	loadPoolBout(boutId) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === boutId);
+			if (!bout || bout.result) return false;
+			const fresh = initialState(s.settings);
+			Object.assign(s, { ...fresh, pool: s.pool });
+			[bout.a, bout.b].forEach((id, i) => {
+				const pf = s.pool.fighters.find(f => f.id === id);
+				Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+			});
+			s.pool.active = boutId;
+		}, { undoable: false });
+	}
+
+	/** Records the loaded bout's result once it is decided, and carries the cards back to the pool. */
+	recordPoolBout() {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === s.pool.active);
+			if (!bout || !boutDecided(s, this.now())) return false;
+			const ids = s.fighters.map(f => f.poolId);
+			if (!ids.includes(bout.a) || !ids.includes(bout.b)) return false;
+			const scores = boutScores(s);
+			const w = leader(s);
+			bout.result = {
+				scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
+				winner: w === null ? null : ids[w],
+			};
+			s.fighters.forEach(f => {
+				const pf = s.pool.fighters.find(x => x.id === f.poolId);
+				if (pf) pf.cards = structuredClone(f.cards);
+			});
+			s.pool.lastFinish = { at: this.now(), ids: [bout.a, bout.b] };
+			s.pool.active = null;
+		}, { undoable: false });
+	}
+
+	/** Takes a recorded result back, e.g. when it was entered for the wrong bout. */
+	clearPoolResult(boutId) {
+		return this.apply(s => {
+			const bout = s.pool.bouts.find(b => b.id === boutId);
+			if (!bout?.result) return false;
+			bout.result = null;
+		}, { undoable: false });
 	}
 
 	// --- setup ---
@@ -830,6 +1084,8 @@ export function describeEvent(s, e) {
 	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
 	case 'tally-unpublished': return 'Tally taken back';
 	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
+	case 'no-show': return `${who(e.side)} did not show, ${e.scores[1 - e.side]}–${e.scores[e.side]} forfeit`;
+	case 'switch-sides': return 'Switch sides';
 	case 'final-exchange': return 'Final exchange';
 	case 'no-call': return 'No call, bout over';
 	case 'stay': return `${who(e.side)} took −1 to stay in`;
