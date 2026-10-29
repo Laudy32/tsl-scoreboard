@@ -455,7 +455,7 @@ function renderSettings(s) {
 			<label class="check"><input type="checkbox" data-setting="liveScore" ${st.liveScore ? 'checked' : ''} /> Keep a live score (off for Unity)</label>
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
 			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
-			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate (0:30, 0:15, time up)</label>
+			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time calls and time up</label>
 		</section>
 
 		<section>
@@ -526,8 +526,8 @@ render();
 
 // The clock text updates every frame without re-rendering the page.
 let wasRunning = isRunning(store.state);
-// The table calls the time at 0:30 and 0:15 (Rule 5.05); one beep, then two.
-const TIME_CALLS = [30_000, 15_000];
+// The table calls the time twice (Rules 5.04, 5.05); one beep, then two.
+const timeCalls = s => [s.settings.timeCallsAt, s.settings.timeCallsAt / 2];
 let prevLeft = null;
 function tick() {
 	const s = store.state;
@@ -544,7 +544,7 @@ function tick() {
 		for (const el of document.querySelectorAll('[data-medical]')) if (el.textContent !== mtext) el.textContent = mtext;
 	}
 	if (isRunning(s) && prevLeft !== null && !displayWindow && s.settings.sound && s.settings.liveScore) {
-		const call = TIME_CALLS.findIndex(ms => prevLeft > ms && left <= ms && left > 0 && s.settings.duration > ms);
+		const call = timeCalls(s).findIndex(ms => prevLeft > ms && left <= ms && left > 0 && s.settings.duration > ms);
 		if (call >= 0) beep(call + 1);
 	}
 	prevLeft = isRunning(s) ? left : null;

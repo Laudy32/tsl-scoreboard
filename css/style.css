@@ -428,7 +428,7 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 }
 .fighter-fields label { clear: both; }
 
-.presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .presets.lengths .preset { padding: 8px 12px; }
 @media (max-width: 480px) { .presets { grid-template-columns: 1fr; } }
 .presets.lengths { grid-template-columns: repeat(3, 1fr); }

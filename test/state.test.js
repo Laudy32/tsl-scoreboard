@@ -775,3 +775,24 @@ test('medical hold: a new round clears it', () => {
 	store.resetRound();
 	assert.equal(s().medical, null);
 });
+
+test('Total Bout Time preset: 5:00, no final exchange, time calls at 1:00 and 0:30', () => {
+	const { store, s, advance } = setup();
+	store.applyPreset('total-bout');
+	assert.equal(s().settings.duration, 300_000);
+	assert.equal(s().settings.finalExchange, false);
+	assert.equal(s().settings.timeCallsAt, 60_000);
+	assert.equal(s().settings.tiebreakerDuration, 60_000);
+	assert.equal(activePreset(s().settings).id, 'total-bout');
+	store.resetRound();
+	store.addPoint(0);
+	store.start();
+	advance(300_000);
+	store.expire();
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(s().finalExchange, false, 'the clock simply runs out');
+	store.applyPreset('standard');
+	assert.equal(s().settings.finalExchange, true, 'Standard turns the final exchange back on');
+	assert.equal(s().settings.timeCallsAt, 30_000);
+	assert.equal(activePreset(s().settings).id, 'standard');
+});

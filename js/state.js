@@ -33,13 +33,17 @@ export const DEFAULT_SETTINGS = {
 	 * exchange resolves, and only then is the bout decided (Rules 5.05, 5.13).
 	 */
 	finalExchange: true,
+	/** The table's first time call; the second is half of it. 30s for Guaranteed Fight Time (0:30, 0:15), 60s for Total Bout Time (1:00, 0:30). */
+	timeCallsAt: 30_000,
 	sound: true,
 };
 
 /** Quick setups for the usual match types. Each sets only the rules it lists. */
 export const MATCH_PRESETS = [
-	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
-	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true } },
+	{ id: 'standard', label: 'Standard', note: '2:30, first to 10', settings: { duration: 150_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true, finalExchange: true, timeCallsAt: 30_000 } },
+	{ id: 'two-minute', label: '2 Minute Standard', note: '2:00, first to 10', settings: { duration: 120_000, tiebreakerDuration: 30_000, pointsToWin: 10, liveScore: true, finalExchange: true, timeCallsAt: 30_000 } },
+	// The original method (5.04): holds don't stop the clock, so there is no final exchange; calls at 1:00 and 0:30.
+	{ id: 'total-bout', label: 'Total Bout Time', note: '5:00, first to 10', settings: { duration: 300_000, tiebreakerDuration: 60_000, pointsToWin: 10, liveScore: true, finalExchange: false, timeCallsAt: 60_000 } },
 	{
 		id: 'unity', label: 'Unity', note: '1:00, 1:30 or 2:00',
 		settings: { duration: 60_000, tiebreakerDuration: 0, pointsToWin: 0, liveScore: false },
