@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -974,4 +974,64 @@ test('pool: cards given in a bout that is abandoned still follow the fighter', (
 	store.giveCard(0, 'red');
 	store.loadPoolBout(2);
 	assert.equal(s().pool.fighters.find(f => f.id === carded).cards.red, 1);
+});
+
+test('cards: a card given by mistake can be taken back after more scoring', () => {
+	const { store, s } = setup();
+	store.addPoint(0); store.addPoint(0);
+	store.giveCard(0, 'red', 'Foot fault');
+	assert.equal(s().fighters[0].score, 1);
+	store.addPoint(1);
+	store.addPoint(0);
+	assert.equal(s().fighters[0].score, 2);
+	store.removeCard(0, 'red');
+	assert.equal(s().fighters[0].cards.red, 0);
+	assert.equal(s().fighters[0].score, 3, 'the point comes back on top of later scoring');
+	assert.equal(describeEvent(s(), s().log.find(e => e.kind === 'card')), 'Blue red card · Foot fault (taken back)');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue red card taken back');
+	assert.equal(store.removeCard(0, 'red'), false, 'nothing left to take back');
+	store.undo();
+	assert.equal(s().fighters[0].cards.red, 1, 'taking it back can be undone');
+});
+
+test('cards: taking back a red at 0 restores the score, and a second yellow goes back to a yellow', () => {
+	const { store, s } = setup();
+	store.giveCard(1, 'red');
+	assert.equal(s().fighters[1].score, -1);
+	store.removeCard(1, 'red');
+	assert.equal(s().fighters[1].score, 0);
+	store.giveCard(0, 'yellow');
+	store.addPoint(0);
+	store.giveCard(0, 'yellow');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 0, red: 1, black: 0 });
+	store.removeCard(0, 'red');
+	assert.deepEqual(s().fighters[0].cards, { yellow: 1, red: 0, black: 0 }, 'back to one yellow');
+	assert.equal(s().fighters[0].score, 1);
+});
+
+test('cards: taking back a black card reopens the bout with its time', () => {
+	const { store, s, advance } = setup();
+	store.start();
+	advance(30_000);
+	store.giveCard(0, 'black');
+	assert.equal(timeLeft(s()), 0);
+	store.removeCard(0, 'black');
+	assert.equal(s().forfeit, null);
+	assert.equal(timeLeft(s(), store.now()), D - 30_000);
+	assert.equal(isRunning(s()), false);
+	assert.equal(store.start(), true);
+});
+
+test('cards: a card carried from an earlier bout comes off the record without touching the score', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	store.loadPoolBout(1);
+	store.giveCard(0, 'yellow');
+	store.giveCard(1, 'yellow');
+	store.loadPoolBout(2);
+	const carried = s().fighters.find(f => f.cards.yellow);
+	const side = s().fighters.indexOf(carried);
+	store.addPoint(side);
+	store.removeCard(side, 'yellow');
+	assert.equal(s().fighters[side].cards.yellow, 0);
+	assert.equal(s().fighters[side].score, 1);
 });
