@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -163,7 +163,7 @@ function primaryButton(s) {
 	if (isUntimed(s)) return '';
 	// A fresh sudden death starts rather than resumes.
 	const freshSuddenDeath = s.suddenDeath && s.remaining === s.settings.tiebreakerDuration;
-	return `<button class="btn primary go" data-action="clock">${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
+	return `<button class="btn primary go" data-action="clock" ${s.medical ? 'disabled' : ''}>${hasStarted(s) && !freshSuddenDeath ? 'Resume' : 'Start'}</button>`;
 }
 
 /** During the final exchange, the one thing the table can't guess: a one-point gap needs a point. */
@@ -176,6 +176,16 @@ function switchText(s) {
 	const stayed = s.tagSwitch.stayed;
 	if (!stayed[0] && !stayed[1]) return 'Switch fighters';
 	return [0, 1].map(i => `${esc(fighterLabel(s, i))} ${stayed[i] ? 'stays (−1)' : 'switches'}`).join(' · ');
+}
+
+const medicalText = s => formatClock(medicalLeft(s), { hundredths: false });
+
+function medicalPanel(s) {
+	if (!s.medical) return '';
+	return `<div class="switch-call medical">
+		<div class="switch-title">Medical hold <span data-medical>${medicalText(s)}</span></div>
+		<div class="row"><button class="btn" data-action="medical-end">End hold</button></div>
+	</div>`;
 }
 
 function switchPanel(s) {
@@ -292,6 +302,7 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
+		${medicalPanel(s)}
 		${switchPanel(s)}
 		${tallyPanel(s)}
 		<div class="actions">
@@ -305,7 +316,7 @@ function renderControl(s) {
 			${matchWinner(s) !== null ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
-		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button></div>
+		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button></div>
 		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
@@ -342,7 +353,7 @@ function renderDisplay(s) {
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
-			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
+			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -527,6 +538,10 @@ function tick() {
 			el.dataset.text = text;
 			el.innerHTML = clockHTML(text);
 		}
+	}
+	if (s.medical) {
+		const mtext = medicalText(s);
+		for (const el of document.querySelectorAll('[data-medical]')) if (el.textContent !== mtext) el.textContent = mtext;
 	}
 	if (isRunning(s) && prevLeft !== null && !displayWindow && s.settings.sound && s.settings.liveScore) {
 		const call = TIME_CALLS.findIndex(ms => prevLeft > ms && left <= ms && left > 0 && s.settings.duration > ms);
@@ -720,6 +735,8 @@ const actions = {
 	stay: el => store.stay(+el.dataset.side),
 	'switch-done': () => store.switchDone(),
 	'sides-done': () => store.sidesDone(),
+	medical: () => store.startMedical(),
+	'medical-end': () => store.endMedical(),
 	duration: el => {
 		store.updateSettings({ duration: +el.dataset.ms });
 		refreshSettings();

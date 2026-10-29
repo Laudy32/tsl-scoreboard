@@ -162,6 +162,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
 		tally: emptyTally(),
+		/** An injured fighter's medical hold, counted down beside the paused bout clock: { startedAt }, or null (3.05-5). */
+		medical: null,
 		/** Fighters switch corners when the first reaches half the winning score (5.12): the call was made, and is waiting to be cleared. */
 		sidesCalled: false,
 		sidesDue: false,
@@ -198,6 +200,10 @@ export function timeLeft(s, now = Date.now()) {
 	const elapsed = s.startedAt === null ? 0 : now - s.startedAt;
 	return Math.max(s.remaining - elapsed, 0);
 }
+
+/** Length of the medical hold (Rule 3.05-5). */
+export const MEDICAL_HOLD = 180_000;
+export const medicalLeft = (s, now = Date.now()) => (s.medical ? Math.max(MEDICAL_HOLD - (now - s.medical.startedAt), 0) : 0);
 
 export const isRunning = s => s.startedAt !== null;
 
@@ -310,7 +316,7 @@ export class Store {
 
 	start() {
 		return this.apply(s => {
-			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s)) return false;
+			if (isRunning(s) || timeLeft(s) === 0 || isUntimed(s) || s.medical) return false;
 			s.startedAt = this.now();
 			// Fighting again means any fighter switch has been made.
 			s.tagSwitch = null;
@@ -322,6 +328,24 @@ export class Store {
 			if (!isRunning(s)) return false;
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
+		}, { undoable: false });
+	}
+
+	/** Pauses the bout and starts the medical hold. */
+	startMedical() {
+		return this.apply(s => {
+			if (s.medical) return false;
+			if (isRunning(s)) s.remaining = timeLeft(s, this.now());
+			s.startedAt = null;
+			s.medical = { startedAt: this.now() };
+		}, { undoable: false });
+	}
+
+	/** The fighter is ready (or out); the bout clock can start again. */
+	endMedical() {
+		return this.apply(s => {
+			if (!s.medical) return false;
+			s.medical = null;
 		}, { undoable: false });
 	}
 
@@ -695,6 +719,7 @@ export class Store {
 		s.tagSwitch = null;
 		s.sidesCalled = false;
 		s.sidesDue = false;
+		s.medical = null;
 		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;

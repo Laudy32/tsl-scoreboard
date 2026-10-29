@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -747,4 +747,31 @@ test('no-show: Unity records the forfeit without scores', () => {
 	store.noShow(1);
 	assert.equal(leader(s()), 0);
 	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+});
+
+test('medical hold: pauses the bout and counts down 3:00 on its own', () => {
+	const { store, s, advance } = setup();
+	store.start();
+	advance(10_000);
+	store.startMedical();
+	assert.equal(s().startedAt, null, 'the bout clock stops');
+	assert.equal(timeLeft(s()), D - 10_000);
+	assert.equal(medicalLeft(s(), store.now()), MEDICAL_HOLD);
+	advance(60_000);
+	assert.equal(medicalLeft(s(), store.now()), MEDICAL_HOLD - 60_000);
+	assert.equal(store.start(), false, 'the bout cannot restart during the hold');
+	advance(MEDICAL_HOLD);
+	assert.equal(medicalLeft(s(), store.now()), 0);
+	store.endMedical();
+	assert.equal(s().medical, null);
+	assert.equal(timeLeft(s()), D - 10_000, 'the bout clock is untouched');
+	assert.equal(store.start(), true);
+});
+
+test('medical hold: a new round clears it', () => {
+	const { store, s } = setup();
+	store.startMedical();
+	assert.equal(store.startMedical(), false, 'only one hold at a time');
+	store.resetRound();
+	assert.equal(s().medical, null);
 });
