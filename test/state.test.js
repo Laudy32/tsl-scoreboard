@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, medicalLeft, MEDICAL_HOLD, attemptLeft,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -795,4 +795,33 @@ test('Total Bout Time preset: 5:00, no final exchange, time calls at 1:00 and 0:
 	assert.equal(s().settings.finalExchange, true, 'Standard turns the final exchange back on');
 	assert.equal(s().settings.timeCallsAt, 30_000);
 	assert.equal(activePreset(s().settings).id, 'standard');
+});
+
+test('attempt clock: only a timed sudden death over 30s, cleared by the table, no outcome at zero', () => {
+	const std = setup();
+	std.store.addPoint(0); std.store.addPoint(1);
+	std.store.endRoundNow();
+	std.store.nextRound();
+	assert.equal(attemptLeft(std.s(), std.store.now()), null, 'a 30s sudden death is all attempt window already');
+
+	const { store, s, advance } = setup();
+	store.applyPreset('total-bout');
+	store.resetRound();
+	store.addPoint(0); store.addPoint(1);
+	store.endRoundNow();
+	store.nextRound();
+	assert.equal(s().suddenDeath, true);
+	assert.equal(attemptLeft(s(), store.now()), 30_000);
+	store.start();
+	advance(20_000);
+	assert.equal(attemptLeft(s(), store.now()), 10_000);
+	advance(15_000);
+	assert.equal(attemptLeft(s(), store.now()), 0, 'it runs out, and nothing else happens');
+	assert.equal(s().remaining > 0, true);
+	assert.equal(leader(s()), null);
+	store.attempt();
+	assert.equal(attemptLeft(s(), store.now()), null);
+	assert.equal(s().attemptMade, true);
+	store.resetRound();
+	assert.equal(s().attemptMade, false);
 });

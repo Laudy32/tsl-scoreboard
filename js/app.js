@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -180,6 +180,15 @@ function switchText(s) {
 
 const medicalText = s => formatClock(medicalLeft(s), { hundredths: false });
 
+function attemptPanel(s) {
+	const left = attemptLeft(s);
+	if (left === null) return '';
+	return `<div class="switch-call attempt${left === 0 ? ' late' : ''}">
+		<div class="switch-title">${left === 0 ? 'No attempt yet' : 'Attempt to score'} <span data-attempt>${formatClock(left, { hundredths: false })}</span></div>
+		<div class="row"><button class="btn" data-action="attempt">Attempt made</button></div>
+	</div>`;
+}
+
 function medicalPanel(s) {
 	if (!s.medical) return '';
 	return `<div class="switch-call medical">
@@ -302,6 +311,7 @@ function renderControl(s) {
 			${fighterPanel(s, 1)}
 		</div>
 
+		${attemptPanel(s)}
 		${medicalPanel(s)}
 		${switchPanel(s)}
 		${tallyPanel(s)}
@@ -529,6 +539,7 @@ let wasRunning = isRunning(store.state);
 // The table calls the time twice (Rules 5.04, 5.05); one beep, then two.
 const timeCalls = s => [s.settings.timeCallsAt, s.settings.timeCallsAt / 2];
 let prevLeft = null;
+let lateAttempt = false;
 function tick() {
 	const s = store.state;
 	const left = timeLeft(s);
@@ -539,6 +550,14 @@ function tick() {
 			el.innerHTML = clockHTML(text);
 		}
 	}
+	if (s.suddenDeath) {
+		const al = attemptLeft(s);
+		const atext = al === null ? '' : formatClock(al, { hundredths: false });
+		for (const el of document.querySelectorAll('[data-attempt]')) if (el.textContent !== atext) el.textContent = atext;
+		// The panel changes its wording at zero; rebuild once when that happens.
+		const late = al === 0;
+		if (late !== lateAttempt) { lateAttempt = late; if (late) render(); }
+	} else lateAttempt = false;
 	if (s.medical) {
 		const mtext = medicalText(s);
 		for (const el of document.querySelectorAll('[data-medical]')) if (el.textContent !== mtext) el.textContent = mtext;
@@ -735,6 +754,7 @@ const actions = {
 	stay: el => store.stay(+el.dataset.side),
 	'switch-done': () => store.switchDone(),
 	'sides-done': () => store.sidesDone(),
+	attempt: () => store.attempt(),
 	medical: () => store.startMedical(),
 	'medical-end': () => store.endMedical(),
 	duration: el => {

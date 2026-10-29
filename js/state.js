@@ -166,6 +166,8 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
 		tally: emptyTally(),
+		/** Sudden death: the table saw an attempt to score, so the attempt clock is cleared. */
+		attemptMade: false,
 		/** An injured fighter's medical hold, counted down beside the paused bout clock: { startedAt }, or null (3.05-5). */
 		medical: null,
 		/** Fighters switch corners when the first reaches half the winning score (5.12): the call was made, and is waiting to be cleared. */
@@ -203,6 +205,18 @@ export function normalize(saved) {
 export function timeLeft(s, now = Date.now()) {
 	const elapsed = s.startedAt === null ? 0 : now - s.startedAt;
 	return Math.max(s.remaining - elapsed, 0);
+}
+
+/** A timed sudden death longer than this needs an attempt to score in its first 30 seconds (Rule 5.04-6). */
+export const ATTEMPT_WINDOW = 30_000;
+
+/** Time left to attempt a score in sudden death, or null when no attempt is being asked for. */
+export function attemptLeft(s, now = Date.now()) {
+	const long = s.settings.tiebreakerDuration > ATTEMPT_WINDOW;
+	if (!s.suddenDeath || s.attemptMade || !long || !s.settings.liveScore || leader(s) !== null || s.forfeit !== null) return null;
+	const left = timeLeft(s, now);
+	if (left === 0 && !isRunning(s) && s.remaining === 0) return null;
+	return Math.max(left - (s.settings.tiebreakerDuration - ATTEMPT_WINDOW), 0);
 }
 
 /** Length of the medical hold (Rule 3.05-5). */
@@ -332,6 +346,14 @@ export class Store {
 			if (!isRunning(s)) return false;
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
+		}, { undoable: false });
+	}
+
+	/** The table saw an attempt to score, so sudden death goes on without the warning. */
+	attempt() {
+		return this.apply(s => {
+			if (!s.suddenDeath || s.attemptMade) return false;
+			s.attemptMade = true;
 		}, { undoable: false });
 	}
 
@@ -690,6 +712,7 @@ export class Store {
 		return this.apply(s => {
 			if (action === 'tiebreaker') {
 				s.suddenDeath = true;
+				s.attemptMade = false;
 				// An untimed sudden death keeps a token sliver on the clock so the round isn't "over" until a winner is named.
 				s.remaining = s.settings.tiebreakerDuration || UNTIMED_REMAINING;
 				s.startedAt = null;
@@ -724,6 +747,7 @@ export class Store {
 		s.sidesCalled = false;
 		s.sidesDue = false;
 		s.medical = null;
+		s.attemptMade = false;
 		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
