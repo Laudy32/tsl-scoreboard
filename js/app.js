@@ -527,7 +527,7 @@ function renderPool(s) {
 				: `<button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button>`;
 		return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
 	}).join('');
-	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+	const table = poolStandings(p).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 	return `<form method="dialog" class="sheet-body">
 		<header class="sheet-head"><h2>Pool</h2><button class="btn small" value="close">Done</button></header>
 		<section>
@@ -537,7 +537,7 @@ function renderPool(s) {
 			${!locked && p.fighters.length > 1 ? `<div class="row"><button type="button" class="btn" data-action="pool-build">${p.bouts.length ? 'Rebuild bouts' : 'Build bouts'}</button></div>` : ''}
 		</section>
 		${bouts ? `<section><h3>Bouts</h3><ul class="pool-bouts">${bouts}</ul></section>` : ''}
-		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">For</th><th class="num">Against</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
+		${p.fighters.length ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${p.fighters.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear pool</button></div>' : ''}
 	</form>`;
 }
