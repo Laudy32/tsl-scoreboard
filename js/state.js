@@ -158,6 +158,9 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
 		tally: emptyTally(),
+		/** Fighters switch corners when the first reaches half the winning score (5.12): the call was made, and is waiting to be cleared. */
+		sidesCalled: false,
+		sidesDue: false,
 		/** Tag Team, after a simul: which teams paid a point to keep their fighter in. Null when no switch is due. */
 		tagSwitch: null,
 		/** Time left when a fighter reached the winning score, so undoing that point can give it back. */
@@ -402,6 +405,14 @@ export class Store {
 			s.startedAt = null;
 		}
 		if (timeLeft(s, this.now()) === 0 && !s.finalExchange) s.showWinner = true;
+		// Corners switch once per round at half the target. Tag Team has its own switches.
+		const half = Math.ceil(target / 2);
+		if (target && !s.sidesCalled && !s.suddenDeath && !isTagTeam(s) && s.remaining > 0 &&
+			s.fighters.some(f => f.score >= half && f.score < target)) {
+			s.sidesCalled = true;
+			s.sidesDue = true;
+			this.#logEvent(s, 'switch-sides');
+		}
 		if (s.settings.pauseAfterScoring && isRunning(s)) {
 			s.remaining = timeLeft(s, this.now());
 			s.startedAt = null;
@@ -468,6 +479,14 @@ export class Store {
 	}
 
 	/** The fighters have switched; clear the call from the screens. */
+	/** The corners switch was handled (or skipped); clear the call from the screens. */
+	sidesDone() {
+		return this.apply(s => {
+			if (!s.sidesDue) return false;
+			s.sidesDue = false;
+		}, { undoable: false });
+	}
+
 	switchDone() {
 		return this.apply(s => {
 			if (!s.tagSwitch) return false;
@@ -649,6 +668,8 @@ export class Store {
 		s.forfeit = null;
 		s.finalExchange = false;
 		s.tagSwitch = null;
+		s.sidesCalled = false;
+		s.sidesDue = false;
 		s.tally = emptyTally();
 		s.stoppedAtTarget = null;
 		s.remaining = s.settings.duration;
@@ -676,6 +697,7 @@ export class Store {
 
 	swapSides() {
 		return this.apply(s => {
+			s.sidesDue = false;
 			s.fighters.reverse();
 			s.simulPenalties = s.simulPenalties.map(p => [...p].reverse());
 			s.tally.judges = s.tally.judges.map(j => [...j].reverse());
@@ -830,6 +852,7 @@ export function describeEvent(s, e) {
 	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
 	case 'tally-unpublished': return 'Tally taken back';
 	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
+	case 'switch-sides': return 'Switch sides';
 	case 'final-exchange': return 'Final exchange';
 	case 'no-call': return 'No call, bout over';
 	case 'stay': return `${who(e.side)} took −1 to stay in`;

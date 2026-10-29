@@ -683,3 +683,42 @@ test('cards: saves from before cards existed still load', () => {
 	assert.deepEqual(n.fighters[0].cards, { yellow: 0, red: 0, black: 0 });
 	assert.equal(n.forfeit, null);
 });
+
+test('switch sides: called once when the first fighter reaches half the target', () => {
+	const { store, s } = setup();
+	for (let i = 0; i < 4; i++) store.addPoint(0);
+	assert.equal(s().sidesDue, false);
+	store.addPoint(1);
+	store.addPoint(0);
+	assert.equal(s().sidesDue, true, 'five is half of ten');
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Switch sides');
+	store.sidesDone();
+	assert.equal(s().sidesDue, false);
+	store.addPoint(0);
+	store.addPoint(1); store.addPoint(1); store.addPoint(1); store.addPoint(1);
+	assert.equal(s().sidesDue, false, 'only once per round');
+});
+
+test('switch sides: swapping clears the call, undo takes it back, a new round resets it', () => {
+	const { store, s } = setup();
+	for (let i = 0; i < 5; i++) store.addPoint(1);
+	assert.equal(s().sidesDue, true);
+	store.undo();
+	assert.equal(s().sidesDue, false);
+	assert.equal(s().sidesCalled, false);
+	for (let i = 0; i < 5; i++) store.addPoint(1);
+	store.swapSides();
+	assert.equal(s().sidesDue, false);
+	store.resetRound();
+	assert.equal(s().sidesCalled, false);
+});
+
+test('switch sides: not in Tag Team, sudden death or Unity', () => {
+	const tag = setup({ division: 'Tag Team' });
+	for (let i = 0; i < 5; i++) tag.store.addPoint(0);
+	assert.equal(tag.s().sidesDue, false);
+	const unity = setup();
+	unity.store.applyPreset('unity');
+	unity.store.addPoint(0);
+	assert.equal(unity.s().sidesDue, false);
+});

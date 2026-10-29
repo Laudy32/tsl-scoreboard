@@ -179,6 +179,12 @@ function switchText(s) {
 }
 
 function switchPanel(s) {
+	if (s.sidesDue) {
+		return `<div class="switch-call">
+		<div class="switch-title">Switch sides</div>
+		<div class="row"><button class="btn" data-action="swap">Swap on screen</button><button class="btn" data-action="sides-done">Done</button></div>
+	</div>`;
+	}
 	if (!s.tagSwitch) return '';
 	const stayButton = i => (s.tagSwitch.stayed[i]
 		? `<span class="stayed" style="--c:${hex(s.fighters[i].color)}">${esc(fighterLabel(s, i))} stays</span>`
@@ -336,7 +342,7 @@ function renderDisplay(s) {
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
-			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : ''}
+			${s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -707,6 +713,7 @@ const actions = {
 	'tie-winner': el => store.setTieWinner(+el.dataset.side),
 	stay: el => store.stay(+el.dataset.side),
 	'switch-done': () => store.switchDone(),
+	'sides-done': () => store.sidesDone(),
 	duration: el => {
 		store.updateSettings({ duration: +el.dataset.ms });
 		refreshSettings();
