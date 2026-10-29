@@ -83,14 +83,14 @@ function cardPanel(s) {
 	const pick = (key, value, label, extra = '', style = '') =>
 		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
 	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
-	const cards = ['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c]));
-	const reasons = CARD_REASONS.map(r => pick('reason', r, esc(r)));
+	const cards = [...['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c])), pick('card', 'no-show', 'No-show')];
+	const reasons = card === 'no-show' ? [] : CARD_REASONS.map(r => pick('reason', r, esc(r)));
 	return `<section class="penalty-sheet">
 		<h3>Penalty</h3>
 		<div class="pills">${fighters.join('')}</div>
 		<div class="pills">${cards.join('')}</div>
-		<div class="pills">${reasons.join('')}</div>
-		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card ? `Give ${card} card` : 'Give card'}</button></div>
+		${reasons.length ? `<div class="pills">${reasons.join('')}</div>` : ''}
+		<div class="row"><button class="btn" data-action="penalty-close">Cancel</button><button class="btn primary" data-action="penalty-give" ${side !== null && card ? '' : 'disabled'}>${card === 'no-show' ? 'Record no-show' : card ? `Give ${card} card` : 'Give card'}</button></div>
 	</section>`;
 }
 
@@ -112,7 +112,7 @@ function statusLine(s) {
 		// A decision by the judges names its kind; a sudden-death winner is just listed.
 		const kind = !s.settings.liveScore && s.tally.tieWinner === null
 			? `<div class="status-sub">${DECISION_LABELS[decisionOf(s.tally.votes)]}</div>` : '';
-		const forfeit = s.forfeit !== null ? '<div class="status-sub">Forfeit</div>' : '';
+		const forfeit = s.forfeit !== null ? `<div class="status-sub">${s.noShow ? 'No-show' : 'Forfeit'}</div>` : '';
 		return `<span class="status win" style="--c:${hex(s.fighters[w].color)}">Winner: <strong>${esc(fighterLabel(s, w))}</strong></span>${forfeit || kind}`;
 	}
 	if (isUntimed(s)) return '<span class="status muted">&nbsp;</span>';
@@ -693,6 +693,12 @@ const actions = {
 	},
 	'penalty-give': async () => {
 		const { side, card, reason } = penalty;
+		if (card === 'no-show') {
+			if (!await confirmAction(`${fighterLabel(store.state, side)} did not show? The bout ends as a 0–10 loss. You can undo this.`, 'No-show')) return;
+			penalty = null;
+			store.noShow(side);
+			return;
+		}
 		if (card === 'black' && !await confirmAction(`Black card for ${fighterLabel(store.state, side)}? The bout is forfeited and the clock stops. You can undo this.`, 'Black card')) return;
 		penalty = null;
 		if (!store.giveCard(side, card, reason)) render();

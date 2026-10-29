@@ -722,3 +722,29 @@ test('switch sides: not in Tag Team, sudden death or Unity', () => {
 	unity.store.addPoint(0);
 	assert.equal(unity.s().sidesDue, false);
 });
+
+test('no-show: a 0–10 loss for the absent fighter, and the bout is over', () => {
+	const { store, s } = setup();
+	store.noShow(0);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 10]);
+	assert.equal(leader(s()), 1);
+	assert.equal(timeLeft(s()), 0);
+	assert.equal(s().noShow, true);
+	assert.equal(describeEvent(s(), s().log.at(-1)), 'Blue did not show, 10–0 forfeit');
+	assert.equal(store.noShow(1), false, 'only once');
+	store.undo();
+	assert.equal(s().forfeit, null);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+	assert.equal(timeLeft(s(), store.now()) > 0, true);
+	store.noShow(1);
+	store.nextRound();
+	assert.equal(s().noShow, false, 'the next bout starts clean');
+});
+
+test('no-show: Unity records the forfeit without scores', () => {
+	const { store, s } = setup();
+	store.applyPreset('unity');
+	store.noShow(1);
+	assert.equal(leader(s()), 0);
+	assert.deepEqual(s().fighters.map(f => f.score), [0, 0]);
+});

@@ -59,6 +59,8 @@ export const CS_ROUNDS_TO_WIN = 2;
 export const usesRounds = s => s.settings.division === ROUNDS_DIVISION;
 
 /** In Tag Team a simul makes both teams switch fighters instead of costing points (Rules 8.04). */
+/** The score recorded for a no-show when no winning score is set. */
+const NO_SHOW_SCORE = 10;
 export const TAG_TEAM_DIVISION = 'Tag Team';
 export const isTagTeam = s => s.settings.division === TAG_TEAM_DIVISION;
 
@@ -152,8 +154,10 @@ export function initialState(settings = DEFAULT_SETTINGS) {
 		/** Points each simul actually took from [left, right], so removing it gives back the same. */
 		simulPenalties: [],
 		suddenDeath: false,
-		/** Side that took a black card and forfeits the bout, or null. */
+		/** Side that took a black card (or didn't show) and forfeits the bout, or null. */
 		forfeit: null,
+		/** The forfeit was a no-show. */
+		noShow: false,
 		/** Time is up but the last exchange is still being fought. */
 		finalExchange: false,
 		/** Unity: each judge's silent tally [left, right], kept off the screens until published. Null until entered. */
@@ -602,6 +606,26 @@ export class Store {
 		}, { clock: card === 'black' });
 	}
 
+	/** The fighter didn't show: a 0–10 loss and the bout is over (Rule 5.06). */
+	noShow(side) {
+		return this.apply(s => {
+			if (s.forfeit !== null) return false;
+			s.forfeit = side;
+			s.noShow = true;
+			if (s.settings.liveScore) {
+				s.fighters[side].score = 0;
+				s.fighters[1 - side].score = s.settings.pointsToWin || NO_SHOW_SCORE;
+			}
+			s.remaining = 0;
+			s.startedAt = null;
+			s.finalExchange = false;
+			s.sidesDue = false;
+			s.tagSwitch = null;
+			s.showWinner = true;
+			this.#logEvent(s, 'no-show', { side });
+		}, { clock: true });
+	}
+
 	/** Clears a fighter's cards, e.g. for a new event or a different fighter. */
 	clearCards(side) {
 		return this.apply(s => {
@@ -666,6 +690,7 @@ export class Store {
 		s.simulPenalties = [];
 		s.suddenDeath = false;
 		s.forfeit = null;
+		s.noShow = false;
 		s.finalExchange = false;
 		s.tagSwitch = null;
 		s.sidesCalled = false;
@@ -852,6 +877,7 @@ export function describeEvent(s, e) {
 	case 'tally-published': return `Judges' tally published: ${e.votes[0]}–${e.votes[1]} votes, score ${e.scores[0]}–${e.scores[1]}`;
 	case 'tally-unpublished': return 'Tally taken back';
 	case 'tie-broken': return `Tie decided in sudden death: ${who(e.side)}`;
+	case 'no-show': return `${who(e.side)} did not show, ${e.scores[1 - e.side]}–${e.scores[e.side]} forfeit`;
 	case 'switch-sides': return 'Switch sides';
 	case 'final-exchange': return 'Final exchange';
 	case 'no-call': return 'No call, bout over';
