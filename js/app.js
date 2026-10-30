@@ -501,6 +501,14 @@ function renderSettings(s) {
 		</section>
 
 		<section>
+			<h3>Backup</h3>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="backup-save">Save backup</button>
+				<button type="button" class="btn" data-action="backup-restore">Restore backup</button>
+				<input type="file" id="backup-file" accept=".json,application/json" hidden />
+			</div>
+		</section>
+		<section>
 			<h3>Reset</h3>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="reset-round">${rounds ? 'Reset round' : 'Reset scores and clock'}</button>
@@ -532,6 +540,15 @@ function renderHistory(s) {
 	</form>`;
 }
 
+/** The group or fighter whose name is being edited in the Matchups sheet: { kind: 'group' | 'fighter', id }. */
+let renaming = null;
+
+/** A name's normal markup, or a text box with Save while that name is being edited. */
+function nameEditor(kind, id, name, normal) {
+	if (renaming?.kind !== kind || renaming.id !== id) return normal;
+	return `<span class="inline rename"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" /><button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+}
+
 function renderPool(s) {
 	const p = s.pool;
 	const g = p.groups.find(x => x.id === p.view);
@@ -545,18 +562,18 @@ function renderPool(s) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
-		const chips = members.map(f => `<span class="chip"><span class="chip-label">${esc(f.name)}${cardsOf(f)}</span>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Rename ${esc(f.name)}">${esc(f.name)}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
 				? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
 				: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
-					: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
+					: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-bout-move" data-dir="-1" data-id="${b.id}" aria-label="Move earlier">▲</button><button type="button" class="btn small" data-action="pool-bout-move" data-dir="1" data-id="${b.id}" aria-label="Move later">▼</button><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
 			return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
 		}).join('');
-		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
+		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
-			<h3>${esc(g.name)}</h3>
+			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
 			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
@@ -802,7 +819,34 @@ function exportCSV() {
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function saveBackup() {
+	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
+	const a = document.createElement('a');
+	a.href = URL.createObjectURL(blob);
+	a.download = `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`;
+	a.click();
+	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function restoreBackup(file) {
+	let saved;
+	try {
+		saved = JSON.parse(await file.text());
+	} catch {
+		saved = null;
+	}
+	if (saved?.app !== 'tsl-scoreboard' || saved.state?.version !== 2) {
+		await confirmAction('That file is not a scoreboard backup.', 'OK');
+		return;
+	}
+	if (!await confirmAction('Replace everything on this scoreboard with the backup? The matchups, results, cards and settings now here are lost.', 'Restore')) return;
+	store.replace(normalize(saved.state), []);
+	settingsDialog.close();
+}
+
 const actions = {
+	'backup-save': saveBackup,
+	'backup-restore': () => $('#backup-file').click(),
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };
@@ -855,6 +899,7 @@ const actions = {
 	'sides-done': () => store.sidesDone(),
 	attempt: () => store.attempt(),
 	pool: () => {
+		renaming = null;
 		refreshPool();
 		poolDialog.showModal();
 	},
@@ -881,6 +926,23 @@ const actions = {
 		if (!store.addPoolBout($('#pool-a').value, $('#pool-b').value)) return;
 		refreshPool();
 		$('#pool-a').focus();
+	},
+	'pool-bout-move': el => {
+		store.movePoolBout(+el.dataset.id, +el.dataset.dir);
+		refreshPool();
+	},
+	rename: el => {
+		renaming = { kind: el.dataset.kind, id: +el.dataset.id };
+		refreshPool();
+		$('#pool-rename')?.select();
+	},
+	'rename-save': () => {
+		const { kind, id } = renaming ?? {};
+		const name = $('#pool-rename')?.value ?? '';
+		renaming = null;
+		if (kind === 'group') store.renamePoolGroup(id, name);
+		else if (kind === 'fighter') store.renamePoolFighter(id, name);
+		refreshPool();
 	},
 	'pool-bout-remove': el => {
 		store.removePoolBout(+el.dataset.id);
@@ -1013,6 +1075,12 @@ settingsDialog.addEventListener('input', e => {
 });
 settingsDialog.addEventListener('change', e => {
 	const el = e.target;
+	if (el.id === 'backup-file') {
+		const [file] = el.files;
+		el.value = '';
+		if (file) restoreBackup(file);
+		return;
+	}
 	if (el.dataset.fighter !== undefined && el.dataset.field === 'color') {
 		const side = +el.dataset.fighter;
 		store.updateFighter(side, { color: el.value });
@@ -1043,8 +1111,18 @@ settingsDialog.addEventListener('change', e => {
 	}
 });
 poolDialog.addEventListener('keydown', e => {
+	if (e.key === 'Escape' && renaming) {
+		e.preventDefault();
+		e.stopPropagation();
+		renaming = null;
+		refreshPool();
+		return;
+	}
 	if (e.key !== 'Enter') return;
-	if (e.target.id === 'pool-group-name') {
+	if (e.target.id === 'pool-rename') {
+		e.preventDefault();
+		actions['rename-save']();
+	} else if (e.target.id === 'pool-group-name') {
 		e.preventDefault();
 		actions['pool-group-add']();
 	} else if (e.target.id === 'pool-a' || e.target.id === 'pool-b') {

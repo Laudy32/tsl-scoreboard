@@ -311,7 +311,13 @@ export function poolStandings(pool, groupId = null) {
 		if (b.result.winner === b.a) { x.wins++; y.losses++; }
 		else if (b.result.winner === b.b) { y.wins++; x.losses++; }
 	}
-	return [...rows.values()].sort((p, q) => q.wins - p.wins || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
+	const table = [...rows.values()].sort((p, q) => q.wins - p.wins || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
+	// Level on all three rules: the Marshal breaks the tie.
+	const level = (p, q) => p.wins === q.wins && p.pointsFor === q.pointsFor && p.pointsAgainst === q.pointsAgainst;
+	table.forEach((r, i) => {
+		r.tied = r.played > 0 && ((i > 0 && level(r, table[i - 1])) || (i < table.length - 1 && level(r, table[i + 1])));
+	});
+	return table;
 }
 
 /** Every pairing once, ordered so fighters rest between bouts (the circle method). Returns [a, b] id pairs. */
@@ -1013,6 +1019,40 @@ export class Store {
 			const bout = s.pool.bouts.find(b => b.id === id);
 			if (!bout || bout.result || s.pool.active === id) return false;
 			s.pool.bouts = s.pool.bouts.filter(b => b.id !== id);
+		}, { undoable: false });
+	}
+
+	/** Moves an unfought matchup one place earlier (dir -1) or later (dir 1) among its group's unfought matchups. */
+	movePoolBout(id, dir) {
+		return this.apply(s => {
+			const bouts = s.pool.bouts;
+			const i = bouts.findIndex(b => b.id === id);
+			const open = b => !b.result && b.id !== s.pool.active;
+			if (i === -1 || !open(bouts[i])) return false;
+			let j = i + dir;
+			while (bouts[j] && !(bouts[j].group === bouts[i].group && open(bouts[j]))) j += dir;
+			if (!bouts[j]) return false;
+			[bouts[i], bouts[j]] = [bouts[j], bouts[i]];
+		}, { undoable: false });
+	}
+
+	renamePoolGroup(id, name) {
+		return this.apply(s => {
+			const g = this.#group(s, id);
+			const clean = String(name).trim().slice(0, 30);
+			if (!g || !clean || s.pool.groups.some(x => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
+			g.name = clean;
+		}, { undoable: false });
+	}
+
+	/** Fixes a fighter's name everywhere: the pool, and the scoreboard if they are on it. */
+	renamePoolFighter(id, name) {
+		return this.apply(s => {
+			const f = s.pool.fighters.find(x => x.id === id);
+			const clean = String(name).trim().slice(0, 40);
+			if (!f || !clean || s.pool.fighters.some(x => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
+			f.name = clean;
+			for (const sf of s.fighters) if (sf.poolId === id) sf.name = clean;
 		}, { undoable: false });
 	}
 

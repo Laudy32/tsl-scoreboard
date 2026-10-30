@@ -358,6 +358,12 @@ kbd {
 	.bar-actions { gap: 4px; }
 	.bar-actions .btn { padding: 6px 8px; font-size: 13px; }
 }
+/* On a phone the header drops the org line so the buttons can be big enough to hit. */
+@media (max-width: 480px) {
+	.org { display: none; }
+	.bar-actions { gap: 6px; }
+	.bar-actions .btn { min-height: 46px; padding: 6px 10px; font-size: 14px; }
+}
 /* Phone on its side: put the clock beside the scores. */
 @media (orientation: landscape) and (max-height: 500px) {
 	.control { max-width: none; display: grid; grid-template-columns: 1fr 1.6fr; align-items: start; }
@@ -632,3 +638,9 @@ body[data-view=display] {
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
 .inline.matchup + .pool-bouts { margin-top: 10px; }
+
+.group-title { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.group-title h3 { margin: 0; }
+.inline.rename input { flex: 1; min-width: 0; }
+.tied { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--gold); color: #16120a; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; vertical-align: 2px; }
+button.chip-label { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
