@@ -1125,6 +1125,11 @@ export class Store {
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
+			// Cards given in this bout and not taken back, with their reasons, for the exported record.
+			cards: s.log.filter(e => e.kind === 'card' && !e.voided).map(e => ({
+				fighter: ids[e.side], card: e.effective, secondYellow: e.converted, reason: e.reason || '',
+			})),
+			noShow: !!s.noShow,
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1318,6 +1323,36 @@ export function describeEvent(s, e) {
 	case 'round-reset': return 'Round reset';
 	default: return e.kind;
 	}
+}
+
+/** Matches, scores and standings of every matchup group as CSV text: one table of matches, then a standings table for each round-robin group. */
+export function poolToCSV(pool) {
+	// A name that starts like a formula would run when the file is opened in a spreadsheet.
+	const text = v => (/^[=+\-@\t\r]/.test(String(v)) ? `'${v}` : String(v));
+	const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+	const name = id => text(pool.fighters.find(f => f.id === id)?.name ?? '');
+	const rows = [['Matches'], ['Group', 'Match', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Winner', 'Status']];
+	for (const g of pool.groups) {
+		pool.bouts.filter(b => b.group === g.id).forEach((b, i) => {
+			const r = b.result;
+			const status = r ? (r.noShow ? 'Final (no-show)' : 'Final') : pool.active === b.id ? 'On scoreboard' : 'Not fought';
+			rows.push([text(g.name), i + 1, name(b.a), name(b.b), r ? r.scores[0] : '', r ? r.scores[1] : '', r ? (r.winner === null ? 'No winner' : name(r.winner)) : '', status]);
+		});
+	}
+	const cards = [];
+	for (const g of pool.groups) {
+		pool.bouts.filter(b => b.group === g.id).forEach((b, i) => {
+			for (const c of b.result?.cards ?? []) {
+				cards.push([text(g.name), i + 1, name(c.fighter), `${CARD_NAMES[c.card]}${c.secondYellow ? ' (second yellow)' : ''}`, text(c.reason)]);
+			}
+		});
+	}
+	if (cards.length) rows.push([], ['Cards'], ['Group', 'Match', 'Fighter', 'Card', 'Reason'], ...cards);
+	for (const g of pool.groups.filter(x => x.robin)) {
+		rows.push([], [`Standings: ${text(g.name)}`], ['Rank', 'Fighter', 'Played', 'Wins', 'Losses', 'Points for', 'Points against', 'Tied']);
+		poolStandings(pool, g.id).forEach((r, i) => rows.push([i + 1, text(r.name), r.played, r.wins, r.losses, r.pointsFor, r.pointsAgainst, r.tied ? 'Yes' : '']));
+	}
+	return rows.map(r => r.map(esc).join(',')).join('\n');
 }
 
 export function logToCSV(s) {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, poolToCSV, boutDecided, restLeft, REST_TIME,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -1256,4 +1256,58 @@ test('pool standings: a three-way tie in a circle falls to points for, then poin
 	const rows = poolStandings(pool);
 	// Each has one win and one win over a tied fighter, so points for decide: F1 has 12, F2 has 15 and F3 has 17.
 	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
+});
+
+test('poolToCSV: matches, scores and a standings table per round-robin group', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('Pool A');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Bo', 'Cy');
+	store.buildPoolBouts();
+	store.addPoolGroup('=Finals');
+	store.addPoolBout('Ana', 'Cy');
+	store.advancePool();
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.advancePool();
+	const lines = poolToCSV(s().pool).split('\n');
+	assert.equal(lines[0], '"Matches"');
+	assert.equal(lines[1], '"Group","Match","Fighter A","Fighter B","Score A","Score B","Winner","Status"');
+	assert.equal(lines[2], '"Pool A","1","Ana","Bo","10","0","Ana","Final"');
+	assert.equal(lines[3], '"Pool A","2","Bo","Cy","","","","On scoreboard"');
+	assert.equal(lines[4], '"Pool A","3","Cy","Ana","","","","Not fought"');
+	assert.ok(lines[5].startsWith('"\'=Finals","1"'), 'a formula-like group name is defused');
+	const i = lines.indexOf('"Standings: Pool A"');
+	assert.ok(i > 0);
+	assert.equal(lines[i + 1], '"Rank","Fighter","Played","Wins","Losses","Points for","Points against","Tied"');
+	assert.equal(lines[i + 2], '"1","Ana","1","1","0","10","0",""');
+	assert.equal(lines.filter(l => l.startsWith('"Standings')).length, 1, 'no standings for a group that is not a round robin');
+});
+
+test('poolToCSV: cards given in a bout are listed with their reasons', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('Round 1');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Cy', 'Di');
+	store.advancePool();
+	store.giveCard(0, 'yellow', 'Foot fault');
+	store.giveCard(0, 'yellow', 'Breach of conduct');
+	store.giveCard(1, 'red', 'Intentional ring out');
+	store.giveCard(1, 'red', 'Other');
+	store.removeCard(1, 'red');
+	for (let i = 0; i < 11; i++) store.addPoint(1); // the red card on Bo cost a point
+	store.advancePool();
+	store.noShow(1);
+	store.recordPoolBout();
+	const lines = poolToCSV(s().pool).split('\n');
+	const i = lines.indexOf('"Cards"');
+	assert.ok(i > 0);
+	assert.deepEqual(lines.slice(i + 1, i + 5), [
+		'"Group","Match","Fighter","Card","Reason"',
+		'"Round 1","1","Ana","Yellow","Foot fault"',
+		'"Round 1","1","Ana","Red (second yellow)","Breach of conduct"',
+		'"Round 1","1","Bo","Red","Intentional ring out"',
+	]);
+	assert.equal(lines.some(l => l.includes('"Other"')), false, 'a card taken back is left out');
+	assert.ok(lines.includes('"Round 1","2","Cy","Di","10","0","Cy","Final (no-show)"'));
+	assert.equal(lines.some(l => l.startsWith('"Standings')), false, 'matches only: no standings for a group that is not a pool');
 });

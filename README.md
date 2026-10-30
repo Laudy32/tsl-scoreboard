@@ -41,7 +41,9 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   every pairing for a round robin, then fight them in order. The Next match
   button records the finished bout and loads the next fighters. Standings rank
   by wins, then the win between tied fighters, then points for, then fewest against, with a 60 second rest when a
-  fighter goes back to back. Cards stay with the fighter from bout to bout
+  fighter goes back to back. Cards stay with the fighter from bout to bout.
+  Export CSV in the Matchups sheet saves every match and score, the cards given with their
+  reasons, and a standings table for each pool (a group built with Add every pairing)
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
