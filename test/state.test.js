@@ -1208,9 +1208,52 @@ test('pool: standings flag fighters who are level on every rule', () => {
 	for (const [x, y] of [['Ana', 'Bo'], ['Cy', 'Di'], ['Ana', 'Cy']]) store.addPoolBout(x, y);
 	const win = side => { store.advancePool(); for (let i = 0; i < 10; i++) store.addPoint(side); };
 	assert.equal(poolStandings(s().pool, s().pool.view).some(r => r.tied), false, 'nothing played yet');
+	win(0); win(0);
+	store.recordPoolBout();
+	// Ana and Cy each won 10-0 and have not met, and Bo and Di each lost 0-10: two pairs level on every rule.
+	const rows = poolStandings(s().pool, s().pool.view);
+	assert.deepEqual(rows.filter(r => r.tied).map(r => r.name).sort(), ['Ana', 'Bo', 'Cy', 'Di']);
+});
+
+test('pool: the winner of the bout between two tied fighters is not flagged tied', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	for (const [x, y] of [['Ana', 'Bo'], ['Cy', 'Di'], ['Ana', 'Cy']]) store.addPoolBout(x, y);
+	const win = side => { store.advancePool(); for (let i = 0; i < 10; i++) store.addPoint(side); };
 	win(0); win(1); win(1);
 	store.recordPoolBout();
 	const rows = poolStandings(s().pool, s().pool.view);
-	const tied = rows.filter(r => r.tied).map(r => r.name).sort();
-	assert.deepEqual(tied, ['Ana', 'Cy']);
+	assert.equal(rows.some(r => r.tied), false);
+	assert.deepEqual(rows.slice(0, 3).map(r => r.name), ['Di', 'Cy', 'Ana']);
+});
+
+test('pool standings: a fighter who beat the one they are tied with ranks higher, even with fewer points', () => {
+	const pool = {
+		fighters: [1, 2, 3, 4].map(id => ({ id, name: `F${id}`, cards: {} })), groups: [], bouts: [
+			// F1 and F2 both finish 2-1. F2 beat F1, but F1 scored more overall.
+			{ id: 1, a: 1, b: 2, result: { scores: [9, 10], winner: 2 } },
+			{ id: 2, a: 1, b: 3, result: { scores: [10, 0], winner: 1 } },
+			{ id: 3, a: 1, b: 4, result: { scores: [10, 0], winner: 1 } },
+			{ id: 4, a: 2, b: 3, result: { scores: [10, 9], winner: 2 } },
+			{ id: 5, a: 2, b: 4, result: { scores: [9, 10], winner: 4 } },
+			{ id: 6, a: 3, b: 4, result: { scores: [10, 8], winner: 3 } },
+		],
+	};
+	const rows = poolStandings(pool);
+	assert.deepEqual(rows.map(r => r.name), ['F2', 'F1', 'F3', 'F4']);
+	assert.equal(rows[0].headToHead, 1);
+	assert.equal(rows.some(r => r.tied), false);
+});
+
+test('pool standings: a three-way tie in a circle falls to points for, then points against', () => {
+	const pool = {
+		fighters: [1, 2, 3].map(id => ({ id, name: `F${id}`, cards: {} })), groups: [], bouts: [
+			{ id: 1, a: 1, b: 2, result: { scores: [10, 5], winner: 1 } },
+			{ id: 2, a: 2, b: 3, result: { scores: [10, 7], winner: 2 } },
+			{ id: 3, a: 3, b: 1, result: { scores: [10, 2], winner: 3 } },
+		],
+	};
+	const rows = poolStandings(pool);
+	// Each has one win and one win over a tied fighter, so points for decide: F1 has 12, F2 has 15 and F3 has 17.
+	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
 });

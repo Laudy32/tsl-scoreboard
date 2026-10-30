@@ -40,7 +40,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Matchups: make named groups (Pool A, Round 1, a series), enter matchups one by one (single elimination, Swiss, or any order) or add
   every pairing for a round robin, then fight them in order. The Next match
   button records the finished bout and loads the next fighters. Standings rank
-  by wins, then points for, then fewest against, with a 60 second rest when a
+  by wins, then the win between tied fighters, then points for, then fewest against, with a 60 second rest when a
   fighter goes back to back. Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
