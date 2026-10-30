@@ -953,7 +953,7 @@ function restLeft(s, now = Date.now()) {
 }
 
 /**
- * Pool standings: wins, then points for, then fewest points against (Rule 6.02c-4).
+ * Pool standings: wins; among fighters level on wins, the win against each other, then points for, then fewest points against.
  * Each row is { id, name, played, wins, losses, pointsFor, pointsAgainst }.
  */
 function poolStandings(pool, groupId = null) {
@@ -971,9 +971,18 @@ function poolStandings(pool, groupId = null) {
 		if (b.result.winner === b.a) { x.wins++; y.losses++; }
 		else if (b.result.winner === b.b) { y.wins++; x.losses++; }
 	}
-	const table = [...rows.values()].sort((p, q) => q.wins - p.wins || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
-	// Level on all three rules: the Marshal breaks the tie.
-	const level = (p, q) => p.wins === q.wins && p.pointsFor === q.pointsFor && p.pointsAgainst === q.pointsAgainst;
+	// Fighters level on wins are split by wins against each other, then points for, then fewest against.
+	for (const r of rows.values()) r.headToHead = 0;
+	for (const b of pool.bouts) {
+		if (!b.result || (group && b.group !== group.id)) continue;
+		const [x, y] = [rows.get(b.a), rows.get(b.b)];
+		if (!x || !y || x.wins !== y.wins) continue;
+		if (b.result.winner === b.a) x.headToHead++;
+		else if (b.result.winner === b.b) y.headToHead++;
+	}
+	const table = [...rows.values()].sort((p, q) => q.wins - p.wins || q.headToHead - p.headToHead || q.pointsFor - p.pointsFor || p.pointsAgainst - q.pointsAgainst);
+	// Level on every rule: the Marshal breaks the tie.
+	const level = (p, q) => p.wins === q.wins && p.headToHead === q.headToHead && p.pointsFor === q.pointsFor && p.pointsAgainst === q.pointsAgainst;
 	table.forEach((r, i) => {
 		r.tied = r.played > 0 && ((i > 0 && level(r, table[i - 1])) || (i < table.length - 1 && level(r, table[i + 1])));
 	});
