@@ -1153,3 +1153,64 @@ test('pool groups: a pool saved before groups becomes one group', () => {
 	assert.equal(s.pool.bouts[0].group, s.pool.groups[0].id);
 	assert.equal(s.pool.view, s.pool.groups[0].id);
 });
+
+test('pool: move an unfought matchup earlier or later within its group', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Cy', 'Di');
+	store.addPoolGroup('Two');
+	store.addPoolBout('Ed', 'Fy');
+	store.selectPoolGroup(s().pool.groups[0].id);
+	store.addPoolBout('Gus', 'Hal');
+	const ids = () => s().pool.bouts.map(b => b.id);
+	const [a, b] = ids();
+	assert.equal(store.movePoolBout(a, -1), false, 'already first');
+	assert.equal(store.movePoolBout(a, 1), true);
+	assert.deepEqual(ids().slice(0, 2), [b, a]);
+	assert.equal(store.movePoolBout(a, 1), true, 'skips the other group');
+	assert.equal(ids()[3], a);
+	assert.equal(store.movePoolBout(ids()[2], 1), false, 'the only matchup of its group');
+	assert.equal(store.movePoolBout(ids()[2], -1), false);
+	assert.equal(s().pool.bouts.find(x => x.id === a).group, s().pool.groups[0].id);
+});
+
+test('pool: a fought matchup cannot be moved', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Cy', 'Di');
+	store.advancePool();
+	assert.equal(store.movePoolBout(s().pool.bouts[0].id, 1), false, 'on the scoreboard');
+	assert.equal(store.movePoolBout(s().pool.bouts[1].id, -1), false, 'the one before it is on the scoreboard');
+});
+
+test('pool: rename a group or a fighter, keeping names unique', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('Pool A');
+	store.addPoolGroup('Pool B');
+	store.addPoolBout('Ana', 'Bo');
+	const [a, b] = s().pool.groups;
+	assert.equal(store.renamePoolGroup(a.id, 'pool b'), false);
+	assert.equal(store.renamePoolGroup(a.id, '  Round 1 '), true);
+	assert.equal(s().pool.groups[0].name, 'Round 1');
+	store.advancePool();
+	const ana = s().pool.fighters.find(f => f.name === 'Ana');
+	assert.equal(store.renamePoolFighter(ana.id, 'bo'), false);
+	assert.equal(store.renamePoolFighter(ana.id, 'Anna'), true);
+	assert.equal(s().fighters[0].name, 'Anna', 'the scoreboard follows');
+	assert.equal(store.renamePoolFighter(ana.id, ' '), false);
+});
+
+test('pool: standings flag fighters who are level on every rule', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	for (const [x, y] of [['Ana', 'Bo'], ['Cy', 'Di'], ['Ana', 'Cy']]) store.addPoolBout(x, y);
+	const win = side => { store.advancePool(); for (let i = 0; i < 10; i++) store.addPoint(side); };
+	assert.equal(poolStandings(s().pool, s().pool.view).some(r => r.tied), false, 'nothing played yet');
+	win(0); win(1); win(1);
+	store.recordPoolBout();
+	const rows = poolStandings(s().pool, s().pool.view);
+	const tied = rows.filter(r => r.tied).map(r => r.name).sort();
+	assert.deepEqual(tied, ['Ana', 'Cy']);
+});
