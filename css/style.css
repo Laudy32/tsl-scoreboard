@@ -358,6 +358,12 @@ kbd {
 	.bar-actions { gap: 4px; }
 	.bar-actions .btn { padding: 6px 8px; font-size: 13px; }
 }
+/* On a phone the header drops the org line so the buttons can be big enough to hit. */
+@media (max-width: 480px) {
+	.org { display: none; }
+	.bar-actions { gap: 6px; }
+	.bar-actions .btn { min-height: 46px; padding: 6px 10px; font-size: 14px; }
+}
 /* Phone on its side: put the clock beside the scores. */
 @media (orientation: landscape) and (max-height: 500px) {
 	.control { max-width: none; display: grid; grid-template-columns: 1fr 1.6fr; align-items: start; }
