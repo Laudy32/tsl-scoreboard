@@ -1,7 +1,7 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
-	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
+	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, poolToCSV, restLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
 
@@ -590,6 +590,7 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		${p.bouts.length ? '<div class="row"><button type="button" class="btn" data-action="pool-csv">Export CSV</button></div>' : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
@@ -819,6 +820,15 @@ function exportCSV() {
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function exportPoolCSV() {
+	const blob = new Blob([poolToCSV(store.state.pool)], { type: 'text/csv' });
+	const a = document.createElement('a');
+	a.href = URL.createObjectURL(blob);
+	a.download = `tsl-matchups-${new Date().toISOString().slice(0, 10)}.csv`;
+	a.click();
+	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 function saveBackup() {
 	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
 	const a = document.createElement('a');
@@ -845,6 +855,7 @@ async function restoreBackup(file) {
 }
 
 const actions = {
+	'pool-csv': exportPoolCSV,
 	'backup-save': saveBackup,
 	'backup-restore': () => $('#backup-file').click(),
 	clock: () => store.toggleClock(),

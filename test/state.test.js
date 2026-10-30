@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
-	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
+	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, poolToCSV, boutDecided, restLeft, REST_TIME,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -1256,4 +1256,29 @@ test('pool standings: a three-way tie in a circle falls to points for, then poin
 	const rows = poolStandings(pool);
 	// Each has one win and one win over a tied fighter, so points for decide: F1 has 12, F2 has 15 and F3 has 17.
 	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
+});
+
+test('poolToCSV: matches, scores and a standings table per round-robin group', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('Pool A');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Bo', 'Cy');
+	store.buildPoolBouts();
+	store.addPoolGroup('=Finals');
+	store.addPoolBout('Ana', 'Cy');
+	store.advancePool();
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.advancePool();
+	const lines = poolToCSV(s().pool).split('\n');
+	assert.equal(lines[0], '"Matches"');
+	assert.equal(lines[1], '"Group","Match","Fighter A","Fighter B","Score A","Score B","Winner","Status"');
+	assert.equal(lines[2], '"Pool A","1","Ana","Bo","10","0","Ana","Final"');
+	assert.equal(lines[3], '"Pool A","2","Bo","Cy","","","","On scoreboard"');
+	assert.equal(lines[4], '"Pool A","3","Cy","Ana","","","","Not fought"');
+	assert.ok(lines[5].startsWith('"\'=Finals","1"'), 'a formula-like group name is defused');
+	const i = lines.indexOf('"Standings: Pool A"');
+	assert.ok(i > 0);
+	assert.equal(lines[i + 1], '"Rank","Fighter","Played","Wins","Losses","Points for","Points against","Tied"');
+	assert.equal(lines[i + 2], '"1","Ana","1","1","0","10","0",""');
+	assert.equal(lines.filter(l => l.startsWith('"Standings')).length, 1, 'no standings for a group that is not a round robin');
 });
