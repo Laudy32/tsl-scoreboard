@@ -50,6 +50,30 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Names, subtitles, seven colors, swap sides
 - Beep and vibration at time up; keeps the screen awake while the clock runs
 
+## How the TV display works today
+
+The spectator display is a second window on the same computer. Open the scoreboard on a
+laptop, press Display, and drag that window onto a TV connected as an extended screen. The
+two windows stay in sync. On a phone, run the scoreboard by itself; a phone and a TV on
+different devices do not sync yet.
+
+## Possible future additions
+
+- **Connect a phone to a TV.** The TV page shows a short code, the phone enters it, and the
+  scores follow. It needs a small relay (for example a Cloudflare Worker) because a static
+  page cannot message another device, and it would not work in the offline single file.
+  Mirroring the screen was considered: it shows one screen only, so the controls would be
+  on the TV too.
+- **Challonge export.** Download or copy pool and group results, keyed to participants, then
+  report results straight to Challonge through the same kind of relay.
+- **Standings on their own screen** (a separate view, so the TV scoreboard stays clear).
+- **Automatic single-elimination brackets** from a seeded list, with byes.
+- **Fighter roster** remembered between events, with autofill in Matchups.
+- **Referee notes** attached to a bout in the history.
+- **Saved event setups**: a named set of match type, time and division loaded in one tap.
+- **Screen-reader support**: announce scores and the clock, and label the plus and minus buttons.
+- **Screen tests** that press the real buttons (score, undo, penalty, Next match).
+
 ## Keyboard
 
 | Keys | Action |
