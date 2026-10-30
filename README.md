@@ -37,9 +37,11 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   switch-sides call at half the winning score, a 3:00 medical hold and a
   no-show (0–10) from the Penalty sheet
 - Total Bout Time match type, and an attempt clock for sudden deaths over 30s
-- Pool: add fighters, build the round-robin bouts, load a bout onto the
-  scoreboard, record its result, and see standings (wins, then points for, then
-  fewest against). Cards stay with the fighter from bout to bout
+- Matchups: make named groups (Pool A, Round 1, a series), enter matchups one by one (single elimination, Swiss, or any order) or add
+  every pairing for a round robin, then fight them in order. The Next match
+  button records the finished bout and loads the next fighters. Standings rank
+  by wins, then points for, then fewest against, with a 60 second rest when a
+  fighter goes back to back. Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
@@ -59,6 +61,16 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 | N | Next round or tiebreaker |
 | Z | Undo |
 | F | Open spectator display |
+
+## One file, no internet
+
+`tsl-scoreboard.html` is the whole scoreboard in a single file, with the code, styles, fonts and logo inside it.
+Send it to someone and they can double-click it to open it in their browser, with no internet and no install.
+The spectator display (Display button) opens from the same file and stays in sync.
+Browsers refuse to run the multi-file version from disk, so use this file for that.
+
+It is generated. After changing anything under `css/`, `js/` or `assets/`, run `npm run build:single` and commit
+the result; `npm test` fails if the file is out of date.
 
 ## Running locally
 

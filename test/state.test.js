@@ -844,7 +844,7 @@ test('pool: round robin pairs everyone once and gives fighters a rest', () => {
 	}
 });
 
-test('pool: fighters and bouts, with setup locked once a result is in', () => {
+test('pool: fighters, round robin and one-off matchups', () => {
 	const { store, s } = setup();
 	assert.equal(store.addPoolFighter('  Ana '), true);
 	assert.equal(store.addPoolFighter('ana'), false, 'no duplicate names');
@@ -853,10 +853,22 @@ test('pool: fighters and bouts, with setup locked once a result is in', () => {
 	store.addPoolFighter('Cy');
 	assert.equal(store.buildPoolBouts(), true);
 	assert.equal(s().pool.bouts.length, 3);
-	store.removePoolFighter(s().pool.fighters[2].id);
-	assert.equal(s().pool.bouts.length, 0, 'changing the fighters clears the bouts');
-	store.buildPoolBouts();
-	assert.equal(s().pool.bouts.length, 1);
+	assert.equal(store.buildPoolBouts(), false, 'nothing missing the second time');
+	assert.equal(store.removePoolFighter(s().pool.fighters[0].id), false, 'a fighter in a bout stays');
+
+	assert.equal(store.addPoolBout('Di', 'Ed'), true, 'new names are added as fighters');
+	assert.equal(s().pool.fighters.length, 5);
+	assert.equal(store.addPoolBout('di', 'DI'), false, 'a fighter cannot fight themself');
+	assert.equal(store.addPoolBout('Di', ''), false);
+	assert.equal(store.addPoolBout('Ana', 'Di'), true, 'a rematch or a later round is just another matchup');
+	assert.deepEqual(s().pool.bouts.map(b => b.id), [1, 2, 3, 4, 5]);
+	const last = s().pool.bouts.at(-1);
+	assert.equal(store.removePoolBout(last.id), true);
+	assert.equal(store.removePoolBout(last.id), false);
+	store.loadPoolBout(1);
+	assert.equal(store.removePoolBout(1), false, 'not while it is on the scoreboard');
+	assert.equal(store.addPoolBout('Fy', 'Gus'), true);
+	assert.equal(s().pool.bouts.at(-1).id, 5, 'the next id follows the highest one in use');
 });
 
 test('pool: load a bout, record the result, and standings rank wins then points for then fewest against', () => {
@@ -876,7 +888,6 @@ test('pool: load a bout, record the result, and standings rank wins then points 
 	assert.equal(r.scores[0], 1);
 	assert.equal(r.scores[1], 10);
 	assert.equal(s().pool.active, null);
-	assert.equal(store.addPoolFighter('Di'), false, 'locked after a result');
 
 	store.undo();
 	assert.equal(s().pool.bouts[0].result !== null, true, 'undo never rolls the pool back');
@@ -1034,4 +1045,111 @@ test('cards: a card carried from an earlier bout comes off the record without to
 	store.removeCard(side, 'yellow');
 	assert.equal(s().fighters[side].cards.yellow, 0);
 	assert.equal(s().fighters[side].score, 1);
+});
+
+test('pool: Next match records the decided bout and loads the next one', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	assert.equal(store.nextPoolBout().id, 1, 'before any bout, the first one is offered');
+	assert.equal(store.advancePool(), true);
+	assert.equal(s().pool.active, 1);
+	assert.equal(store.nextPoolBout(), null, 'not while the loaded bout is still being fought');
+	assert.equal(store.advancePool(), false);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(store.nextPoolBout().id, 2);
+	assert.equal(store.advancePool(), true);
+	assert.equal(s().pool.bouts[0].result.scores[0], 10, 'the first result was recorded on the way');
+	assert.equal(s().pool.active, 2);
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.advancePool();
+	assert.equal(s().pool.active, 3);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(store.nextPoolBout(), null, 'the last bout has no next one');
+	assert.equal(store.recordPoolBout(), true);
+	assert.equal(s().pool.bouts.every(b => b.result), true);
+});
+
+test('pool: no Next match without a pool, or in the middle of an unrecorded bout', () => {
+	const { store } = setup();
+	assert.equal(store.nextPoolBout(), null);
+	const p = pool(['Ana', 'Bo']);
+	p.store.addPoint(0);
+	assert.equal(p.store.nextPoolBout(), null, 'a hand-played bout is not replaced by the pool');
+});
+
+test('pool: matchups entered by hand are fought in order and recorded, and more can be added between rounds', () => {
+	const { store, s } = setup();
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolBout('Cy', 'Di');
+	store.advancePool();
+	assert.deepEqual(s().fighters.map(f => f.name), ['Ana', 'Bo']);
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.advancePool();
+	assert.deepEqual(s().fighters.map(f => f.name), ['Cy', 'Di']);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(store.nextPoolBout(), null, 'the list is finished');
+	store.addPoolBout('Bo', 'Cy');
+	assert.equal(store.nextPoolBout().id, 3, 'a second round can be added after results are in');
+	store.advancePool();
+	assert.equal(s().pool.bouts[1].result.winner, s().pool.bouts[1].a);
+	const table = poolStandings(s().pool);
+	assert.equal(table.filter(r => r.wins === 1).length, 2);
+});
+
+test('pool groups: each keeps its own matchups, fighters and standings', () => {
+	const { store, s } = setup();
+	assert.equal(store.addPoolGroup('Pool A'), true);
+	assert.equal(store.addPoolGroup('pool a'), false, 'no duplicate group names');
+	store.selectPoolGroup(s().pool.groups[0].id);
+	for (const n of ['Ana', 'Bo', 'Cy']) store.addPoolFighter(n);
+	store.buildPoolBouts();
+	assert.equal(s().pool.bouts.length, 3);
+	store.addPoolGroup('Finals');
+	store.addPoolBout('Ana', 'Dee');
+	assert.equal(s().pool.bouts.length, 4);
+	assert.equal(s().pool.bouts[3].group, s().pool.view);
+	const [a, f] = s().pool.groups;
+	assert.equal(poolStandings(s().pool, a.id).length, 3);
+	assert.deepEqual(poolStandings(s().pool, f.id).map(r => r.name).sort(), ['Ana', 'Dee']);
+	assert.equal(a.robin, true);
+	assert.equal(f.robin, false);
+});
+
+test('pool groups: Next match runs groups in the order they were made', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolGroup('Two');
+	store.addPoolBout('Cy', 'Di');
+	store.selectPoolGroup(s().pool.groups[0].id);
+	assert.equal(store.nextPoolBout().a, s().pool.fighters[0].id);
+	store.advancePool();
+	assert.equal(s().fighters[0].name, 'Ana');
+});
+
+test('pool groups: a group with results cannot be deleted, an unfought one can', () => {
+	const { store, s } = setup();
+	store.addPoolGroup('One');
+	store.addPoolBout('Ana', 'Bo');
+	store.addPoolGroup('Two');
+	store.addPoolBout('Cy', 'Di');
+	store.advancePool();
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.advancePool();
+	store.addPoolGroup('Three');
+	store.addPoolBout('Ed', 'Fy');
+	const [one, two, three] = s().pool.groups;
+	assert.equal(store.removePoolGroup(one.id), false, 'has a result');
+	assert.equal(store.removePoolGroup(two.id), false, 'on the scoreboard');
+	assert.equal(store.removePoolGroup(three.id), true);
+	assert.equal(s().pool.bouts.length, 2);
+	assert.deepEqual(s().pool.fighters.map(f => f.name), ['Ana', 'Bo', 'Cy', 'Di']);
+});
+
+test('pool groups: a pool saved before groups becomes one group', () => {
+	const old = initialState();
+	old.pool = { fighters: [{ id: 1, name: 'A', cards: {} }, { id: 2, name: 'B', cards: {} }], bouts: [{ id: 1, a: 1, b: 2, result: null }], active: null, nextId: 3, lastFinish: null };
+	const s = normalize(JSON.parse(JSON.stringify(old)));
+	assert.equal(s.pool.groups.length, 1);
+	assert.equal(s.pool.bouts[0].group, s.pool.groups[0].id);
+	assert.equal(s.pool.view, s.pool.groups[0].id);
 });
