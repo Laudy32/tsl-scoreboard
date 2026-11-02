@@ -49,7 +49,9 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   with a name column and an optional charter or group column, or one name
   per line). Matchup names then autofill from it and take its exact
   spelling and charter; a name not on it is added as typed. The roster is
-  kept on the device, apart from the scoreboard's undo history
+  kept on the device, apart from the scoreboard's undo history. The charter
+  shows under the fighter's name on the scoreboard and table cards; tap a
+  fighter in Matchups to fix their name or charter
 - Results download from Matchups:
   - Table cards as a Word file in the club's table card layout: a page per
     group, a band per match, points, winner (with how it was won), warnings

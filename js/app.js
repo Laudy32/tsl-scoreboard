@@ -555,9 +555,16 @@ function renderHistory(s) {
 let renaming = null;
 
 /** A name's normal markup, or a text box with Save while that name is being edited. */
-function nameEditor(kind, id, name, normal) {
+function nameEditor(kind, id, name, normal, charter = null) {
 	if (renaming?.kind !== kind || renaming.id !== id) return normal;
-	return `<span class="inline rename"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" /><button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+	// A fighter's charter is edited beside the name, picked from the roster's charters or typed.
+	const charterBox = charter === null ? '' : `<input id="pool-charter" list="pool-charters" maxlength="40" value="${esc(charter)}" placeholder="Charter" autocomplete="off" />`;
+	return `<span class="inline rename${charter === null ? '' : ' with-charter'}"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" />${charterBox}<button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+}
+
+/** Charters to pick from: the roster's, then any typed in this event. */
+function pickCharters(p) {
+	return [...new Set([...roster.map(r => r.charter), ...p.fighters.map(f => f.charter)].filter(Boolean))].sort();
 }
 
 /** Names offered when entering a matchup: this event's fighters first, then the roster. */
@@ -580,7 +587,7 @@ function renderPool(s) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
-		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Rename ${esc(f.name)}">${esc(f.name)}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}">${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
@@ -592,6 +599,7 @@ function renderPool(s) {
 		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
 			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
+			<datalist id="pool-charters">${pickCharters(p).map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
 			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
@@ -1026,7 +1034,7 @@ const actions = {
 		const name = $('#pool-rename')?.value ?? '';
 		renaming = null;
 		if (kind === 'group') store.renamePoolGroup(id, name);
-		else if (kind === 'fighter') store.renamePoolFighter(id, name);
+		else if (kind === 'fighter') store.renamePoolFighter(id, name, $('#pool-charter')?.value ?? '');
 		refreshPool();
 	},
 	'pool-bout-remove': el => {
@@ -1215,7 +1223,7 @@ poolDialog.addEventListener('keydown', e => {
 		return;
 	}
 	if (e.key !== 'Enter') return;
-	if (e.target.id === 'pool-rename') {
+	if (e.target.id === 'pool-rename' || e.target.id === 'pool-charter') {
 		e.preventDefault();
 		actions['rename-save']();
 	} else if (e.target.id === 'pool-group-name') {

@@ -1382,6 +1382,7 @@ test('table cards: every matchup in order, filled in once fought, and a Word fil
 	assert.deepEqual(g.bouts[0], {
 		number: 1,
 		fighters: [name(b1.a), name(b1.b)],
+		charters: ['', ''],
 		result: { noShow: false, scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
 	}, 'a card taken back is left off');
 	assert.equal(g.bouts[1].result, null);
@@ -1412,9 +1413,15 @@ test('roster: a fighter picked from it gets its spelling and charter, and the ex
 	assert.deepEqual([a.name, a.charter], ['Jose Alberto Romero', 'Tennessee']);
 	assert.deepEqual([b.name, b.charter], ['New Person', undefined], 'a name not on the roster is added as typed');
 	store.loadPoolBout(1);
+	assert.deepEqual(s().fighters.map(f => f.subtitle), ['Tennessee', ''], 'the charter shows under the name on the scoreboard');
+	assert.equal(store.renamePoolFighter(b.id, 'New  Person', ' Rebel Sabers '), true, 'name and charter can be fixed');
+	assert.deepEqual([s().fighters[1].name, s().fighters[1].subtitle], ['New Person', 'Rebel Sabers']);
+	assert.equal(store.renamePoolFighter(a.id, 'Jose Alberto Romero'), true);
+	assert.equal(s().pool.fighters[0].charter, 'Tennessee', 'a rename without a charter keeps it');
 	for (let i = 0; i < 10; i++) store.addPoint(0);
 	store.recordPoolBout();
 	const row = resultRows(s().pool)[0];
-	assert.deepEqual([row.charter_a, row.charter_b], ['Tennessee', '']);
+	assert.deepEqual([row.charter_a, row.charter_b], ['Tennessee', 'Rebel Sabers']);
+	assert.deepEqual(tableCardGroups(s().pool)[0].bouts[0].charters, ['Tennessee', 'Rebel Sabers']);
 	assert.equal(JSON.stringify(s()).includes('Stevie'), false, 'the roster is not saved in the state or its undo');
 });

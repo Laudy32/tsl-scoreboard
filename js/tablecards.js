@@ -83,7 +83,7 @@ function docxGroup(g, { date, logo, index }) {
 			let winner = won ? [docxPara([[`✓ ${f}`, { bold: true }]]), r.decision ? docxPara([[r.decision, small]]) : ''] : '';
 			if (crossed) winner = won ? '' : docxPara([['No-show', { bold: true, color: 'C00000' }]]);
 			rows.push(docxRow([
-				docxCell(cName, [docxPara([['Fighter name:', { size: 12 }]]), docxPara([[f, { bold: true, strike: crossed }]])]),
+				docxCell(cName, [docxPara([['Fighter name:', { size: 12 }]]), docxPara([[f, { bold: true, strike: crossed }], ...(b.charters?.[i] ? [[`  ${b.charters[i]}`, { size: 14 }]] : [])])]),
 				docxCell(cPts, docxPara([[r && !crossed ? String(r.scores[i]) : '', { bold: true, size: 24 }]], { align: 'center' }), { fill: DOCX_SHADE }),
 				docxCell(cWin, winner),
 				docxCell(cWarn, docxPara([[r ? r.cards[i] : '', { size: 18 }]])),

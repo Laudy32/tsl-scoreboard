@@ -1078,14 +1078,22 @@ export class Store {
 		}, { undoable: false });
 	}
 
-	/** Fixes a fighter's name everywhere: the pool, and the scoreboard if they are on it. */
-	renamePoolFighter(id, name) {
+	/**
+	 * Fixes a fighter's name, and their charter when given, everywhere: the pool,
+	 * and the scoreboard if they are on it (the charter shows under the name).
+	 */
+	renamePoolFighter(id, name, charter) {
 		return this.apply(s => {
 			const f = s.pool.fighters.find(x => x.id === id);
-			const clean = String(name).trim().slice(0, 40);
+			const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 			if (!f || !clean || s.pool.fighters.some(x => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
 			f.name = clean;
-			for (const sf of s.fighters) if (sf.poolId === id) sf.name = clean;
+			if (charter !== undefined) f.charter = String(charter).trim().replace(/\s+/g, ' ').slice(0, 40);
+			for (const sf of s.fighters) {
+				if (sf.poolId !== id) continue;
+				sf.name = clean;
+				if (charter !== undefined) sf.subtitle = f.charter;
+			}
 		}, { undoable: false });
 	}
 
@@ -1129,7 +1137,7 @@ export class Store {
 		Object.assign(s, { ...fresh, pool: s.pool });
 		[bout.a, bout.b].forEach((id, i) => {
 			const pf = s.pool.fighters.find(f => f.id === id);
-			Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+			Object.assign(s.fighters[i], { name: pf.name, subtitle: pf.charter ?? '', poolId: id, cards: structuredClone(pf.cards) });
 		});
 		s.pool.active = boutId;
 	}
@@ -1419,6 +1427,7 @@ export const DECISION_NAMES = {
  */
 export function tableCardGroups(pool) {
 	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
 	return pool.groups.map(g => {
 		const bouts = pool.bouts.filter(b => b.group === g.id);
 		return {
@@ -1426,9 +1435,11 @@ export function tableCardGroups(pool) {
 			robin: !!g.robin,
 			division: bouts.find(b => b.result?.division)?.result.division ?? '',
 			fighters: g.fighters.map(name),
+			charters: g.fighters.map(charter),
 			bouts: bouts.map((b, i) => ({
 				number: i + 1,
 				fighters: [name(b.a), name(b.b)],
+				charters: [charter(b.a), charter(b.b)],
 				result: b.result && {
 					noShow: b.result.decision === 'no-show',
 					scores: b.result.scores,
