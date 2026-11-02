@@ -170,12 +170,17 @@ function clockHTML(text) {
 
 // --- control view ---
 
+/** The pool bout on the scoreboard is decided and no bout follows it, so only recording is left. */
+const recordDue = s => s.pool.active !== null && boutDecided(s) && !store.nextPoolBout();
+const recordButton = '<button class="btn primary" data-action="pool-record">Record result <kbd>N</kbd></button>';
+
 function primaryButton(s) {
 	if (timeLeft(s) === 0 && !s.settings.liveScore) {
 		const sd = store.nextRoundAction() === 'tiebreaker';
 		if (sd) return `<button class="btn primary" data-action="next">Sudden death${s.settings.tiebreakerDuration ? ` · ${formatClock(s.settings.tiebreakerDuration, { hundredths: false })}` : ''}</button>`;
 		if (usesRounds(s) && store.nextRoundAction()) return `<button class="btn primary" data-action="next">${nextLabel(s)}</button>`;
 		if (store.nextPoolBout()) return '<button class="btn primary" data-action="next-pool">Next match</button>';
+		if (recordDue(s)) return recordButton;
 		return '';
 	}
 	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
@@ -231,7 +236,8 @@ function medicalPanel(s) {
 }
 
 function switchPanel(s) {
-	if (s.sidesDue) {
+	// The call only matters while the bout is on.
+	if (s.sidesDue && timeLeft(s) > 0) {
 		return `<div class="switch-call">
 		<div class="switch-title">Switch sides</div>
 		<div class="row"><button class="btn" data-action="swap">Swap on screen</button><button class="btn" data-action="sides-done">Done</button></div>
@@ -304,7 +310,11 @@ function fighterPanel(s, side) {
 
 /** The Next button: rounds in Championship Series, a tiebreaker when the bout is tied, or the next pool bout. Otherwise there is none. */
 function nextButton(s, next) {
-	if (!s.settings.liveScore) return '';
+	// Unity: once time is up the main button moves on; before the first bout this one loads it.
+	if (!s.settings.liveScore) return timeLeft(s) > 0 && store.nextPoolBout() ? '<button class="btn" data-action="next-pool">Next match <kbd>N</kbd></button>' : '';
+	if (recordDue(s)) return recordButton;
+	// Championship Series: the next pool bout loads before the first round and once the match is won.
+	if (usesRounds(s) && !next && store.nextPoolBout()) return '<button class="btn" data-action="next-pool">Next match <kbd>N</kbd></button>';
 	if (usesRounds(s) || next === 'tiebreaker') {
 		return `<button class="btn" data-action="next" ${next ? '' : 'disabled'}>${next === 'tiebreaker' ? 'Tiebreaker' : nextLabel(s)} <kbd>N</kbd></button>`;
 	}
@@ -366,11 +376,11 @@ function renderControl(s) {
 				${nextButton(s, next)}
 				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>${usesRounds(s) ? 'End round' : 'End match'}</button>
 			</div>
-			${matchWinner(s) !== null || (!usesRounds(s) && !store.nextPoolBout() && boutDecided(s)) ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
+			${s.pool.active === null && (matchWinner(s) !== null || (!usesRounds(s) && !store.nextPoolBout() && boutDecided(s))) ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
 		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Matchups</button></div>
-		${s.pool.active !== null && boutDecided(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
+		${s.pool.active !== null && boutDecided(s) && !recordDue(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
 		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
@@ -408,7 +418,7 @@ function renderDisplay(s) {
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
 			<div class="d-status">${statusLine(s)}</div>
 			${(() => { const r = restLeft(s); return r ? `<div class="d-switch">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div>` : ''; })()}
-			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue ? '<div class="d-switch">Switch sides</div>' : ''}
+			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue && timeLeft(s) > 0 ? '<div class="d-switch">Switch sides</div>' : ''}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -593,7 +603,7 @@ function renderPool(s) {
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
-				? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Undo</button>`
+				? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Take back</button>`
 				: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
 					: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-bout-move" data-dir="-1" data-id="${b.id}" aria-label="Move earlier">▲</button><button type="button" class="btn small" data-action="pool-bout-move" data-dir="1" data-id="${b.id}" aria-label="Move later">▼</button><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
 			return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
@@ -980,8 +990,10 @@ const actions = {
 		penalty = null;
 		if (!store.giveCard(side, card, reason)) render();
 	},
-	'clear-cards': el => {
-		store.clearCards(+el.dataset.side);
+	'clear-cards': async el => {
+		const side = +el.dataset.side;
+		if (!await confirmAction(`Clear every card ${fighterLabel(store.state, side)} carries, including cards from earlier bouts? This can't be undone.`, 'Clear cards')) return;
+		store.clearCards(side);
 		refreshSettings();
 	},
 	point: el => store.addPoint(+el.dataset.side, +(el.dataset.delta || 1)),
@@ -1064,12 +1076,16 @@ const actions = {
 		poolDialog.close();
 	},
 	'pool-record': () => store.recordPoolBout(),
-	'pool-undo': el => {
-		store.clearPoolResult(+el.dataset.id);
+	'pool-undo': async el => {
+		const p = store.state.pool;
+		const bout = p.bouts.find(b => b.id === +el.dataset.id);
+		const name = id => p.fighters.find(f => f.id === id)?.name ?? '';
+		if (!bout || !await confirmAction(`Take back the result of ${name(bout.a)} vs ${name(bout.b)}? The bout goes back on the list to be fought again, and the cards given in it come off.`, 'Take back')) return;
+		store.clearPoolResult(bout.id);
 		refreshPool();
 	},
 	'pool-clear': async () => {
-		if (!await confirmAction('Clear every group, matchup and result?', 'Clear all')) return;
+		if (!await confirmAction('Clear every group, matchup and result? This can\'t be undone. Download the results or a backup first if you need them.', 'Clear all')) return;
 		store.clearPool();
 		refreshPool();
 	},
@@ -1083,7 +1099,8 @@ const actions = {
 	next: () => store.nextRound(),
 	'next-pool': () => store.advancePool(),
 	end: async () => {
-		if (await confirmAction('End this round now? The clock goes to zero.', 'End round')) store.endRoundNow();
+		const what = usesRounds(store.state) ? 'round' : 'match';
+		if (await confirmAction(`End this ${what} now? The clock goes to zero.`, `End ${what}`)) store.endRoundNow();
 	},
 	settings: openSettings,
 	history: openHistory,
@@ -1126,13 +1143,21 @@ const actions = {
 		}
 	},
 	'new-match': async () => {
-		if (await confirmAction('Start a new match with the same fighters? Scores, round wins and history are cleared. You can undo this.', 'New match')) {
+		const s = store.state;
+		const saving = s.pool.active !== null && boutDecided(s);
+		if (await confirmAction(saving
+			? 'Start a new match with the same fighters? This bout\'s result is saved to Matchups first.'
+			: 'Start a new match with the same fighters? Scores, round wins and history are cleared. Matchups and results are kept. You can undo this.', 'New match')) {
 			store.newMatch();
 			settingsDialog.close();
 		}
 	},
 	'reset-all': async () => {
-		if (await confirmAction('Reset everything, including fighter names and colors? Your rule settings are kept. You can undo this.', 'Reset everything')) {
+		const s = store.state;
+		const note = s.pool.active !== null
+			? (boutDecided(s) ? ' This bout\'s result is saved to Matchups first.' : ' The bout on the scoreboard goes back to Matchups unfought.')
+			: ' You can undo this.';
+		if (await confirmAction(`Reset everything, including fighter names and colors? Your rule settings, matchups and results are kept.${note}`, 'Reset everything')) {
 			store.newMatch({ full: true });
 			settingsDialog.close();
 		}
@@ -1277,7 +1302,13 @@ window.addEventListener('keydown', e => {
 		e: () => store.addPoint(1, 1),
 		d: () => store.addPoint(1, -1),
 		' ': () => (timeLeft(store.state) ? store.toggleClock() : store.toggleShowWinner()),
-		n: () => (usesRounds(store.state) || store.nextRoundAction() === 'tiebreaker' ? store.nextRound() : store.advancePool()),
+		n: () => {
+			const s = store.state;
+			if ((usesRounds(s) && store.nextRoundAction()) || store.nextRoundAction() === 'tiebreaker') return store.nextRound();
+			if (store.nextPoolBout()) return store.advancePool();
+			if (recordDue(s)) return store.recordPoolBout();
+			return false;
+		},
 		z: () => store.undo(),
 		f: () => (view === 'display' ? setView('control') : openDisplay()),
 		escape: () => view === 'display' && setView('control'),

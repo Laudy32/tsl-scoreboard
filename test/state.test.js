@@ -1443,3 +1443,106 @@ test('pool: four fighters follow the club pool card order; other sizes use the r
 	assert.ok(xml.includes('Pool A / Round 1 / Match 1: 2 Bo vs 3 Cy'));
 	assert.ok(xml.includes('Cavalry Cup III (Regional)'), 'the event is on every card');
 });
+
+function fourPool() {
+	const t = setup();
+	t.store.addPoolGroup('Pool A');
+	['Ana', 'Bo', 'Cy', 'Di'].forEach(n => t.store.addPoolFighter(n));
+	t.store.buildPoolBouts();
+	t.win = side => { for (let i = 0; i < 10; i++) t.store.addPoint(side); };
+	return t;
+}
+
+test('review: a new match or a full reset keeps the matchups and records the decided bout', () => {
+	const { store, s, win } = fourPool();
+	store.advancePool();
+	store.start();
+	win(0);
+	assert.equal(store.nextPoolBout()?.id, s().pool.bouts[1].id);
+	store.newMatch();
+	assert.equal(s().pool.bouts.length, 6, 'matchups stay');
+	assert.ok(s().pool.bouts[0].result, 'the decided bout was recorded first');
+	assert.equal(s().pool.active, null);
+	assert.ok(s().fighters.every(f => f.poolId === undefined));
+	store.advancePool();
+	store.newMatch({ full: true });
+	assert.equal(s().pool.bouts.length, 6);
+	assert.equal(s().pool.bouts[1].result, null, 'an unfinished bout goes back unfought');
+	assert.equal(store.nextPoolBout()?.id, s().pool.bouts[1].id);
+});
+
+test('review: undo cannot reach back past loading or recording a pool bout', () => {
+	const { store, s, win } = fourPool();
+	store.advancePool();
+	store.start();
+	win(0);
+	store.advancePool();
+	assert.equal(store.canUndo(), false);
+	store.start();
+	store.addPoint(1);
+	assert.equal(store.canUndo(), true, 'scoring in the new bout is undoable');
+	store.undo();
+	assert.equal(s().pool.active, s().pool.bouts[1].id);
+	assert.equal(s().fighters[0].poolId, s().pool.bouts[1].a);
+});
+
+test('review: loading another bout records the decided one first', () => {
+	const { store, s, win } = fourPool();
+	store.advancePool();
+	store.start();
+	win(1);
+	store.loadPoolBout(s().pool.bouts[3].id);
+	assert.deepEqual(s().pool.bouts[0].result.scores, [0, 10]);
+	assert.equal(s().pool.active, s().pool.bouts[3].id);
+});
+
+test('review: Next match is still offered after recording by hand', () => {
+	const { store, s, win } = fourPool();
+	store.advancePool();
+	store.start();
+	win(0);
+	store.recordPoolBout();
+	assert.equal(store.nextPoolBout()?.id, s().pool.bouts[1].id);
+	assert.equal(store.advancePool(), true);
+	assert.equal(s().pool.active, s().pool.bouts[1].id);
+});
+
+test('review: Championship Series records the match, as rounds won', () => {
+	const { store, s } = setup();
+	store.setDivision('Championship Series');
+	store.addPoolGroup('Final');
+	store.addPoolBout('Ana', 'Bo');
+	store.loadPoolBout(s().pool.bouts[0].id);
+	const round = (side, other = 0) => {
+		store.start();
+		for (let i = 0; i < other; i++) store.addPoint(1 - side);
+		for (let i = 0; i < 10; i++) store.addPoint(side);
+		store.nextRound();
+	};
+	store.start();
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	assert.equal(boutDecided(s()), false, 'one round does not decide the match');
+	assert.equal(store.recordPoolBout(), false);
+	store.nextRound();
+	round(1, 3);
+	round(0, 8);
+	assert.equal(boutDecided(s()), true);
+	store.recordPoolBout();
+	const r = s().pool.bouts[0].result;
+	assert.deepEqual(r.scores, [2, 1]);
+	assert.equal(r.winner, s().pool.bouts[0].a);
+	assert.equal(resultRows(s().pool)[0].notes, 'Rounds 10-0, 3-10, 10-8');
+});
+
+test('review: taking back a result takes back the cards that bout gave', () => {
+	const { store, s, win } = fourPool();
+	store.advancePool();
+	const a = s().pool.bouts[0].a;
+	store.giveCard(0, 'yellow', 'Foot fault');
+	store.start();
+	win(1);
+	store.advancePool();
+	assert.equal(s().pool.fighters.find(f => f.id === a).cards.yellow, 1);
+	store.clearPoolResult(s().pool.bouts[0].id);
+	assert.deepEqual(s().pool.fighters.find(f => f.id === a).cards, { yellow: 0, red: 0, black: 0 });
+});

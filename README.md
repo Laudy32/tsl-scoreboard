@@ -41,7 +41,11 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   enter a pool's fighters and tap Make pool matchups for a round robin (a
   4-fighter pool follows the club's pool card: 2v3, 4v1, 1v2, 3v4, 4v2, 3v1),
   then fight them in order. The Next match
-  button records the finished bout and loads the next fighters. Standings rank
+  button records the finished bout and loads the next fighters; after the
+  last bout it becomes Record result. A Championship Series bout is recorded
+  once the match is won, as rounds won. Starting a new match or resetting
+  never clears the matchups or results, and undo stops at the start of each
+  bout (a wrong result is taken back in Matchups). Standings rank
   by wins, then the win between tied fighters, then points for, then fewest against, with a 60 second rest when a
   fighter goes back to back. Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
