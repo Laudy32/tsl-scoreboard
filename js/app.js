@@ -594,7 +594,6 @@ function renderPool(s) {
 		${body}
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
-			<p class="muted">Table cards are a Word file in the club's layout, one page per group, filled in for bouts fought and blank for the rest. The CSV has a row per bout fought, for Excel, Google Sheets or entering scores in Challonge.</p>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
 				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
