@@ -93,10 +93,10 @@ function cardChips(f) {
 function cardPanel(s) {
 	if (!penalty) return '';
 	const { side, card, reason } = penalty;
-	const pick = (key, value, label, extra = '', style = '') =>
-		`<button type="button" class="pill${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
-	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`));
-	const cards = [...['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c])), pick('card', 'no-show', 'No-show')];
+	const pick = (key, value, label, extra = '', style = '', cls = '') =>
+		`<button type="button" class="pill${cls ? ` ${cls}` : ''}${String(penalty[key]) === value ? ' on' : ''}" data-action="penalty-pick" data-key="${key}" data-value="${esc(value)}" aria-pressed="${String(penalty[key]) === value}" ${style}>${label}${extra}</button>`;
+	const fighters = [0, 1].map(i => pick('side', String(i), esc(fighterLabel(s, i)), '', `style="--c:${hex(s.fighters[i].color)}"`, 'side'));
+	const cards = [...['yellow', 'red', 'black'].map(c => pick('card', c, CARD_NAMES[c], '', '', `card-${c}`)), pick('card', 'no-show', 'No-show')];
 	const reasons = card === 'no-show' ? [] : CARD_REASONS.map(r => pick('reason', r, esc(r)));
 	// Cards already given, each with a way to take it back.
 	const given = [0, 1].flatMap(i => ['yellow', 'red', 'black'].flatMap(c =>
@@ -170,6 +170,21 @@ function clockHTML(text) {
 
 // --- control view ---
 
+/**
+ * Once the bout is over, the step that moves the event on is the main button:
+ * a tiebreaker, the next round, the next pool match, or recording the last bout.
+ * Showing or hiding the winner drops to a small button beside it.
+ */
+function promotedStep(s) {
+	if (!s.settings.liveScore || timeLeft(s) !== 0 || s.finalExchange) return null;
+	const next = store.nextRoundAction();
+	if (next === 'tiebreaker') return `<button class="btn primary" data-action="next">Tiebreaker <kbd>N</kbd></button>`;
+	if (usesRounds(s) && next === 'next') return `<button class="btn primary" data-action="next">${nextLabel(s)} <kbd>N</kbd></button>`;
+	if (store.nextPoolBout()) return '<button class="btn primary" data-action="next-pool">Next match <kbd>N</kbd></button>';
+	if (recordDue(s)) return recordButton;
+	return null;
+}
+
 /** The pool bout on the scoreboard is decided and no bout follows it, so only recording is left. */
 const recordDue = s => s.pool.active !== null && boutDecided(s) && !store.nextPoolBout();
 const recordButton = '<button class="btn primary" data-action="pool-record">Record result <kbd>N</kbd></button>';
@@ -184,6 +199,8 @@ function primaryButton(s) {
 		return '';
 	}
 	if (s.finalExchange) return '<button class="btn primary" data-action="no-call">No call · end bout</button>';
+	const step = promotedStep(s);
+	if (step) return step;
 	if (timeLeft(s) === 0) {
 		return `<button class="btn primary" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	}
@@ -301,7 +318,7 @@ function fighterPanel(s, side) {
 			<span class="name">${esc(fighterLabel(s, side))}${cardChips(f)}</span>
 			${subtitle(f)}
 			<span class="score">${f.score}</span>
-			<span class="hint">tap +1 <kbd>${key[0]}</kbd></span>
+			<span class="hint"><kbd>${key[0]}</kbd></span>
 		</button>
 		${dots(s, side)}
 		<button class="btn minus" data-action="point" data-side="${side}" data-delta="-1" ${f.score > 0 ? '' : 'disabled'}>−1 <kbd>${key[1]}</kbd></button>
@@ -312,7 +329,8 @@ function fighterPanel(s, side) {
 function nextButton(s, next) {
 	// Unity: once time is up the main button moves on; before the first bout this one loads it.
 	if (!s.settings.liveScore) return timeLeft(s) > 0 && store.nextPoolBout() ? '<button class="btn" data-action="next-pool">Next match <kbd>N</kbd></button>' : '';
-	if (recordDue(s)) return recordButton;
+	// The next step is the main button now; this slot toggles the winner.
+	if (promotedStep(s)) return leader(s) === null ? '' : `<button class="btn" data-action="winner">${s.showWinner ? 'Hide winner' : 'Show winner'}</button>`;
 	// Championship Series: the next pool bout loads before the first round and once the match is won.
 	if (usesRounds(s) && !next && store.nextPoolBout()) return '<button class="btn" data-action="next-pool">Next match <kbd>N</kbd></button>';
 	if (usesRounds(s) || next === 'tiebreaker') {
@@ -374,13 +392,12 @@ function renderControl(s) {
 			<div class="row">
 				<button class="btn" data-action="undo" ${store.canUndo() ? '' : 'disabled'}>Undo <kbd>Z</kbd></button>
 				${nextButton(s, next)}
-				<button class="btn" data-action="end" ${timeUp ? 'disabled' : ''}>${usesRounds(s) ? 'End round' : 'End match'}</button>
+				${timeUp ? '' : `<button class="btn" data-action="end">${usesRounds(s) ? 'End round' : 'End match'}</button>`}
 			</div>
 			${s.pool.active === null && (matchWinner(s) !== null || (!usesRounds(s) && !store.nextPoolBout() && boutDecided(s))) ? '<button class="btn wide" data-action="new-match">Start a new match</button>' : ''}
 		</div>
 
 		<div class="more"><button class="btn small${penalty ? ' on' : ''}" data-action="penalty" aria-expanded="${!!penalty}">Penalty</button><button class="btn small" data-action="medical" ${s.medical ? 'disabled' : ''}>Medical</button><button class="btn small" data-action="pool">Matchups</button></div>
-		${s.pool.active !== null && boutDecided(s) && !recordDue(s) ? '<div class="more"><button class="btn small" data-action="pool-record">Record pool result</button></div>' : ''}
 		${cardPanel(s)}
 		<details class="help">
 			<summary>Keyboard shortcuts</summary>
@@ -545,9 +562,11 @@ function renderSettings(s) {
 // --- history sheet ---
 
 function renderHistory(s) {
+	// Only Championship Series has rounds; elsewhere the Round column would read R1 on every row.
+	const showRound = usesRounds(s);
 	const rows = [...s.log].reverse().map(e => `<tr>
-		<td>R${e.round}${e.suddenDeath ? ' SD' : ''}</td>
-		<td>${formatClock(e.clock, { hundredths: false })}</td>
+		${showRound ? `<td>R${e.round}${e.suddenDeath ? ' SD' : ''}</td>` : ''}
+		<td>${!showRound && e.suddenDeath ? 'SD ' : ''}${formatClock(e.clock, { hundredths: false })}</td>
 		<td>${esc(describeEvent(s, e))}</td>
 		<td class="num">${e.scores[0]}–${e.scores[1]}</td>
 	</tr>`).join('');
@@ -557,7 +576,7 @@ function renderHistory(s) {
 		${rounds ? `<section><h3>Rounds</h3><ul class="rounds">${rounds}</ul></section>` : ''}
 		<section>
 			<h3>Every action, newest first</h3>
-			${rows ? `<table class="log"><thead><tr><th>Round</th><th>Clock</th><th>Event</th><th class="num">${esc(fighterLabel(s, 0))}–${esc(fighterLabel(s, 1))}</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Nothing scored yet.</p>'}
+			${rows ? `<table class="log"><thead><tr>${showRound ? '<th>Round</th>' : ''}<th>Clock</th><th>Event</th><th class="num">${esc(fighterLabel(s, 0))}–${esc(fighterLabel(s, 1))}</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted">Nothing scored yet.</p>'}
 		</section>
 		<div class="row"><button type="button" class="btn" data-action="export" ${rows ? '' : 'disabled'}>Download as CSV</button></div>
 	</form>`;

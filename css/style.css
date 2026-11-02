@@ -30,6 +30,7 @@
 	--line: #2f333b;
 	--text: #f2f3f5;
 	--muted: #8e949d;
+	--label: #b4bac3;
 	--gold: #d6a83e;
 	--gold-dim: #8a6a22;
 	--go: #22a559;
@@ -66,7 +67,7 @@ kbd {
 	opacity: 0.5;
 	vertical-align: 0.1em;
 }
-@media (hover: none) { kbd { display: none; } }
+@media (hover: none) { kbd, .help { display: none; } }
 
 /* --- buttons --- */
 .btn {
@@ -83,9 +84,13 @@ kbd {
 .btn:hover:not(:disabled) { background: #2a2e36; border-color: #454a54; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.35; cursor: default; }
-.btn.small { min-height: 40px; padding: 6px 12px; font-size: 14px; }
-.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-.btn.danger:hover:not(:disabled) { background: #c42528; }
+.btn.small { min-height: 44px; padding: 6px 12px; font-size: 14px; }
+.btn.danger { background: transparent; border-color: var(--danger); color: #ff7a7c; }
+.btn.danger:hover:not(:disabled) { background: rgba(229, 56, 59, .14); border-color: var(--danger); }
+/* Solid red is kept for the confirmation, where the action is about to happen. */
+.confirm .btn.danger { background: var(--danger); color: #fff; }
+.confirm .btn.danger:hover:not(:disabled) { background: #c42528; }
+.sheet-body .row:has(> .btn.danger) { margin-top: 28px; }
 .btn.wide { width: 100%; }
 .row { display: flex; gap: 8px; }
 .row > .btn { flex: 1; }
@@ -197,7 +202,7 @@ kbd {
 .clock.running { border-color: var(--go); box-shadow: inset 0 2px 12px rgba(0,0,0,.6), 0 0 0 1px var(--go), 0 0 28px -6px var(--go); }
 .clock.up { color: var(--danger); border-color: var(--danger); }
 .clock.untimed { font-size: clamp(40px, 12vw, 80px); padding: 22px 0 18px; color: var(--danger); border-color: var(--danger); text-transform: uppercase; }
-.status-row { text-align: center; min-height: 30px; margin-top: -4px; }
+.status-row { text-align: center; min-height: 28px; margin: -6px 0; display: flex; align-items: center; justify-content: center; flex-direction: column; }
 .status { font: 800 26px/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .status.muted { color: var(--muted); font-size: 18px; letter-spacing: 0.2em; }
 .status.alert { color: var(--danger); }
@@ -258,7 +263,7 @@ kbd {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.simul .score-btn .name { color: var(--gold); }
+.simul .score-btn .name { color: var(--label); }
 .score-btn .subtitle { font-size: 14px; opacity: 0.85; line-height: 1.2; }
 .score-btn .score {
 	font: 900 clamp(84px, 24vw, 132px)/0.9 var(--display);
@@ -286,6 +291,8 @@ kbd {
 }
 .fighter.vs small { font: 700 12px/1.2 var(--body); letter-spacing: 0.1em; color: var(--muted); }
 .minus { font-size: 22px; }
+/* A -1 at zero has nothing to take back: keep its space, lose the ghost. */
+.minus:disabled { visibility: hidden; }
 .dots { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; }
 .dot {
 	width: 16px;
@@ -312,7 +319,7 @@ kbd {
 
 /* Unity judges' tally */
 .tally { margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
-.tally h3 { margin: 0; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--gold); }
+.tally h3 { margin: 0; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--label); }
 .tally-row { display: grid; grid-template-columns: 5.5em 1fr 1fr; gap: 8px; align-items: center; }
 .tally-row input { width: 100%; min-height: 52px; text-align: center; font: 800 28px/1 var(--display); border: 1px solid var(--line); border-radius: 12px; background: #0b0c0e; color: #fff; }
 .tally-row input:disabled { opacity: 0.6; }
@@ -362,7 +369,7 @@ kbd {
 @media (max-width: 480px) {
 	.org { display: none; }
 	.bar-actions { gap: 6px; }
-	.bar-actions .btn { min-height: 46px; padding: 6px 10px; font-size: 14px; }
+	.bar-actions .btn { min-height: 44px; padding: 6px 10px; font-size: 14px; }
 }
 /* Phone on its side: put the clock beside the scores. */
 @media (orientation: landscape) and (max-height: 500px) {
@@ -396,7 +403,7 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 	z-index: 1;
 }
 .sheet h2 { margin: 0; font: 900 30px/1 var(--display); text-transform: uppercase; letter-spacing: 0.03em; }
-.sheet h3 { margin: 22px 0 10px; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--gold); }
+.sheet h3 { margin: 22px 0 10px; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--label); }
 .sheet label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; font-weight: 700; margin-bottom: 10px; color: #c7cbd1; }
 .sheet label.check { flex-direction: row; align-items: center; gap: 10px; font-weight: 500; font-size: 16px; color: var(--text); }
 .sheet input:not([type=checkbox]), .sheet select, .sheet textarea {
@@ -413,7 +420,7 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 .sheet input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--gold); }
 .sheet input:invalid { border-color: var(--danger); }
 .inline { display: flex; gap: 6px; }
-.inline .btn { min-height: 46px; }
+.inline .btn { min-height: 44px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 @media (max-width: 480px) { .two-col { grid-template-columns: 1fr; } }
 .fighter-fields {
@@ -618,11 +625,17 @@ body[data-view=display] {
 .more { display: flex; justify-content: center; margin-top: 18px; }
 .more .btn.on { border-color: var(--gold, #d4a640); }
 .penalty-sheet { border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 12px; margin: 12px 0; display: grid; gap: 10px; }
-.penalty-sheet h3 { margin: 0; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; color: var(--gold, #d4a640); }
+.penalty-sheet h3 { margin: 0; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; color: var(--label); }
 .penalty-sheet .pills { display: flex; flex-wrap: wrap; gap: 8px; }
-.penalty-sheet .pill { font: inherit; color: inherit; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 8px 14px; min-height: 40px; cursor: pointer; }
+.penalty-sheet .pill { font: inherit; color: inherit; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 8px 14px; min-height: 44px; cursor: pointer; }
+.penalty-sheet .pill.side { border-color: var(--c); }
+.penalty-sheet .pill.side::before, .penalty-sheet .pill[class*="card-"]::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 50%; background: var(--c); vertical-align: 0; }
+.penalty-sheet .pill.card-yellow { --c: #f5c518; }
+.penalty-sheet .pill.card-red { --c: #d62828; }
+.penalty-sheet .pill.card-black { --c: #111; }
+.penalty-sheet .pill.card-black::before { box-shadow: 0 0 0 1px rgba(255,255,255,.6); }
 .penalty-sheet .pill.on { border-color: var(--c, var(--gold, #d4a640)); box-shadow: inset 0 0 0 1px var(--c, var(--gold, #d4a640)); background: rgba(255,255,255,.14); }
-.penalty-sheet .row .btn { font-size: 1rem; min-height: 48px; padding: 8px 14px; }
+.penalty-sheet .row .btn { font-size: 1rem; min-height: 52px; padding: 8px 14px; }
 .more { gap: 12px; }
 .d-switch [data-medical], .switch-title [data-medical] { font-variant-numeric: tabular-nums; margin-left: .4em; }
 
@@ -630,7 +643,7 @@ body[data-view=display] {
 .pool-bouts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .pool-bout { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.15); border-radius: 10px; }
 .pool-bout.done { opacity: .75; }
-.pool-result { color: var(--gold, #d4a640); font-weight: 600; }
+.pool-result { color: var(--text); font-weight: 600; }
 .chip-label { padding: 6px 12px; display: inline-block; }
 
 .d-switch [data-rest] { font-variant-numeric: tabular-nums; margin-left: .4em; }
