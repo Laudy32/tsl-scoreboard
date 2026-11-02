@@ -1260,43 +1260,74 @@ test('pool standings: a three-way tie in a circle falls to points for, then poin
 	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
 });
 
-test('results export: one row per bout fought, by name, with how it was won', () => {
-	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+test('results export: rows in the rankings format, one per bout fought, in play order', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy', 'Di']);
+	store.setDivision('Standard');
+	store.setPoolEvent({ name: ' Cavalry Cup III Standard ', tier: 'Regional' });
 	const names = id => s().pool.fighters.find(f => f.id === id).name;
-	const [b1, b2] = s().pool.bouts;
+	const [b1, b2, b3] = s().pool.bouts;
 	store.loadPoolBout(b1.id);
 	for (let i = 0; i < 10; i++) store.addPoint(1);
 	store.addPoint(0);
 	store.swapSides();
 	store.recordPoolBout();
-	store.loadPoolBout(b2.id);
+	store.loadPoolBout(b3.id);
 	store.giveCard(0, 'black');
 	store.recordPoolBout();
 
 	const rows = resultRows(s().pool);
 	assert.equal(rows.length, 2, 'the bout not fought yet is left out');
-	assert.deepEqual(
-		{ ...rows[0], recordedAt: '' },
-		{ group: s().pool.groups[0].name, bout: 1, fighterA: names(b1.a), fighterB: names(b1.b), scoreA: 1, scoreB: 10,
-			winner: names(b1.b), loser: names(b1.a), decision: 'points', cardsA: '', cardsB: '', division: '', recordedAt: '' },
-	);
-	assert.match(rows[0].recordedAt, /^\d{4}-\d\d-\d\dT/);
-	assert.equal(rows[1].decision, 'forfeit');
-	assert.equal(rows[1].cardsA, 'Black', 'the card goes with the fighter it was given to');
+	const { date, time, ...rest } = rows[0];
+	assert.deepEqual(rest, {
+		event_name: 'Cavalry Cup III Standard', event_tier: 'Regional', division: 'standard', bout_id: `B${b1.id}`,
+		stage: 'pool', pool: s().pool.groups[0].name, round: 1, play_order: 1, bout_label: '',
+		fighter_a: names(b1.a), fighter_b: names(b1.b), charter_a: '', charter_b: '',
+		score_a: 1, score_b: 10, winner: 'B', result_type: 'normal', notes: '', group: s().pool.groups[0].name,
+	});
+	assert.match(date, /^\d{4}-\d\d-\d\d$/);
+	assert.match(time, /^\d\d:\d\d$/);
+	assert.equal(b2.result, null);
+	assert.deepEqual([rows[1].round, rows[1].play_order], [2, 1], 'four fighters fight two bouts a round');
+	assert.equal(rows[1].result_type, 'forfeit');
+	assert.equal(rows[1].notes, `Forfeit; ${names(b3.a)}: Black`, 'the card goes with the fighter it was given to');
 
 	const csv = resultsToCSV(s().pool).split('\n');
 	assert.equal(csv.length, 3);
-	assert.match(csv[0], /^"Group","Bout","Fighter A"/);
-	assert.match(csv[1], /"1-10"/, 'the score in Challonge form');
+	assert.equal(csv[0], '"event_name","event_tier","division","bout_id","date","time","stage","pool","round","play_order","bout_label","fighter_a","fighter_b","charter_a","charter_b","score_a","score_b","winner","result_type","notes"');
 
 	const json = resultsToJSON(s().pool, 0);
 	assert.equal(json.format, 'tsl-results');
+	assert.equal(json.event.tier, 'Regional');
 	assert.equal(json.bouts.length, 2);
-	assert.equal(json.groups[0].unfought.length, 1);
-	assert.equal(json.fighters.find(f => f.cards.black).name, s().pool.fighters.find(f => f.cards.black).name);
+	assert.equal(json.groups[0].unfought.length, 4);
+	assert.equal(json.fighters.find(f => f.cards.black).name, names(b3.a));
 });
 
-test('results export: Unity decisions, no-shows, and results saved before the export existed', () => {
+test('results export: bracket groups are rounds in order, labelled from their names, with "Pool A" as pool A', () => {
+	const { store, s } = setup();
+	const win = () => { for (let i = 0; i < 10; i++) store.addPoint(0); store.advancePool() || store.recordPoolBout(); };
+	store.addPoolGroup('Pool A');
+	['Ana', 'Bo'].forEach(n => store.addPoolFighter(n));
+	store.buildPoolBouts();
+	store.addPoolGroup('Semifinals');
+	store.addPoolBout('Ana', 'Cy'); store.addPoolBout('Bo', 'Di');
+	store.addPoolGroup('Bronze');
+	store.addPoolBout('Cy', 'Di');
+	store.addPoolGroup('Final');
+	store.addPoolBout('Ana', 'Bo');
+	store.loadPoolBout(s().pool.bouts[0].id);
+	for (let i = 0; i < 5; i++) win();
+	const rows = resultRows(s().pool);
+	assert.deepEqual(rows.map(r => [r.stage, r.pool, r.round, r.play_order, r.bout_label]), [
+		['pool', 'A', 1, 1, ''],
+		['bracket', '', 1, 1, 'semifinal'],
+		['bracket', '', 1, 2, 'semifinal'],
+		['bracket', '', 2, 1, 'third_place'],
+		['bracket', '', 3, 1, 'final'],
+	]);
+});
+
+test('results export: Unity decisions, no-shows as scratches, and results saved before the export existed', () => {
 	const u = pool(['Ana', 'Bo'], {});
 	u.store.applyPreset('unity');
 	u.store.loadPoolBout(1);
@@ -1306,16 +1337,17 @@ test('results export: Unity decisions, no-shows, and results saved before the ex
 	u.store.endRoundNow();
 	u.store.publishTally();
 	u.store.recordPoolBout();
-	assert.equal(resultRows(u.s().pool)[0].decision, 'split');
+	assert.equal(resultRows(u.s().pool)[0].notes, 'Split decision');
 
 	const n = pool(['Ana', 'Bo']);
 	n.store.loadPoolBout(1);
 	n.store.noShow(1);
 	n.store.recordPoolBout();
 	const ns = resultRows(n.s().pool)[0];
-	assert.equal(ns.decision, 'no-show');
-	assert.deepEqual([ns.scoreA, ns.scoreB], ['', ''], 'a no-show is crossed out, not exported as 10-0');
-	assert.match(resultsToCSV(n.s().pool).split('\n')[1], /"","","","Ana"/);
+	const absent = n.s().pool.bouts[0].result.winner === n.s().pool.bouts[0].a ? ns.fighter_b : ns.fighter_a;
+	assert.equal(ns.result_type, 'scratch', 'a no-show is not rated as a loss');
+	assert.deepEqual([ns.score_a, ns.score_b], ['', ''], 'and is crossed out, not exported as 10-0');
+	assert.equal(ns.notes, `${absent} did not show`);
 	const card = tableCardGroups(n.s().pool)[0].bouts[0].result;
 	assert.equal(card.noShow, true);
 	const xml = new TextDecoder().decode(tableCardsDocx(tableCardGroups(n.s().pool)));
@@ -1323,11 +1355,13 @@ test('results export: Unity decisions, no-shows, and results saved before the ex
 	assert.ok(!xml.includes('<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">10<'), 'with no 10 in the points column');
 
 	const old = n.s().pool;
+	delete old.event;
 	delete old.bouts[0].result.decision;
 	delete old.bouts[0].result.at;
 	const row = resultRows(old)[0];
-	assert.equal(row.decision, '');
-	assert.equal(row.recordedAt, '');
+	assert.equal(row.result_type, 'normal');
+	assert.deepEqual([row.date, row.time, row.event_name], ['', '', '']);
+	assert.deepEqual(normalize({ ...initialState(), pool: old }).pool.event, { name: '', tier: '' });
 });
 
 test('table cards: every matchup in order, filled in once fought, and a Word file that holds them', () => {

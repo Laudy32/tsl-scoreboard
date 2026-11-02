@@ -52,11 +52,15 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
     Director, timekeeper, line judges and table judge to sign. Bouts fought
     are filled in, a no-show match is crossed out, and the rest are blank to
     fill by hand
-  - One row per bout fought (group, fighters, scores, the score in
-    Challonge's "10-4" form, winner, how it was won, cards, division, time;
-    a no-show has no score)
-    as a CSV for Excel, Google Sheets or entering in Challonge, or as JSON
-    for other tools
+  - A CSV with one row per bout fought, in the format the Saber Legion
+    rankings importer reads: event, tier, division, a stable bout id, date
+    and time the result was recorded, pool or bracket, pool letter, round,
+    play order, bracket label (semifinal, third_place, final, taken from the
+    group's name), fighters, scores, winner (A, B or draw), result type and
+    notes. A no-show is a scratch with no score, so it isn't rated as a loss;
+    a black card is a forfeit. Name pool groups "Pool A", "Pool B" and so on,
+    and bracket groups in the order they're fought (e.g. "Quarterfinals",
+    "Semifinals", "Bronze", "Final"). The same rows are also available as JSON
 - Spectator display (Display button or F) that stays in sync with the
   controls, for a second monitor or TV on the same computer
 - Names, subtitles, seven colors, swap sides

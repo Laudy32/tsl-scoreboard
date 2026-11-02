@@ -650,6 +650,8 @@ body[data-view=display] {
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
 .sheet-body section + .row { margin-top: 16px; }
+.event-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-bottom: 10px; }
+.event-fields input { width: 100%; }
 .inline.matchup + .pool-bouts { margin-top: 10px; }
 
 .group-title { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -811,7 +813,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null };
+	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null, event: { name: '', tier: '' } };
 }
 
 function initialState(settings = DEFAULT_SETTINGS) {
@@ -873,6 +875,7 @@ function normalize(saved) {
 /** A pool saved before groups existed gets one group holding its fighters and bouts. */
 function normalizePool(saved) {
 	const pool = { ...emptyPool(), ...saved };
+	pool.event = { ...emptyPool().event, ...saved?.event };
 	pool.groups = (pool.groups ?? []).map(g => ({ ...g, fighters: [...(g.fighters ?? [])] }));
 	if (pool.bouts.some(b => b.group == null)) {
 		let g = pool.groups[0];
@@ -1840,6 +1843,15 @@ class Store {
 		}, { undoable: false });
 	}
 
+	/** The event the results belong to, for the rankings export: { name, tier }. */
+	setPoolEvent(changes) {
+		return this.apply(s => {
+			for (const key of ['name', 'tier']) {
+				if (key in changes) s.pool.event[key] = String(changes[key] ?? '').trim().slice(0, 60);
+			}
+		}, { undoable: false });
+	}
+
 	/** Takes a recorded result back, e.g. when it was entered for the wrong bout. */
 	clearPoolResult(boutId) {
 		return this.apply(s => {
@@ -2042,51 +2054,85 @@ function tableCardGroups(pool) {
 	});
 }
 
+/** A bracket bout's label for the rankings, from its group's name: semifinal, third_place, final or ''. */
+function boutLabel(groupName) {
+	const n = groupName.toLowerCase();
+	if (/bronze|3rd|third/.test(n)) return 'third_place';
+	if (/semi/.test(n)) return 'semifinal';
+	if (/final|gold/.test(n)) return 'final';
+	return '';
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+
+/** The pool letter for the rankings: "Pool A" gives "A"; any other name is kept as it is. */
+const poolLetter = name => name.match(/^pool\s+(\S+)$/i)?.[1] ?? name;
+
 /**
- * Every recorded pool bout, group by group in fighting order, as plain rows
- * with names (not ids) so the results read the same in a spreadsheet, a
- * Challonge upload or the rankings. Results saved before a field existed leave it ''.
+ * Every recorded bout, in play order, in the format the rankings importer reads
+ * (the Ranking Update handoff, section 3). Round robin groups are pools and the
+ * rest are bracket rounds in the order they were made. A no-show is a scratch
+ * with no score, so it isn't rated as a loss; a black card is a forfeit.
+ * Results saved before a field existed leave it ''.
  */
 function resultRows(pool) {
 	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const event = pool.event ?? { name: '', tier: '' };
 	const rows = [];
+	let bracketRound = 0;
 	for (const g of pool.groups) {
-		let n = 0;
-		for (const b of pool.bouts) {
-			if (b.group !== g.id) continue;
-			n++;
-			if (!b.result) continue;
-			const { winner } = b.result;
-			// A no-show is recorded as the rules' 0–10 for the standings, but exported with no score.
-			const scores = b.result.decision === 'no-show' ? ['', ''] : b.result.scores;
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		if (!g.robin && bouts.length) bracketRound++;
+		// A round robin plays everyone once per round: half the fighters' worth of bouts.
+		const perRound = Math.max(1, Math.floor(g.fighters.length / 2));
+		bouts.forEach((b, i) => {
+			if (!b.result) return;
+			const { winner, decision = '' } = b.result;
+			const at = b.result.at ? new Date(b.result.at) : null;
+			const scratch = decision === 'no-show';
+			const cards = [cardsText(b.result.cards?.[0]), cardsText(b.result.cards?.[1])];
+			const notes = [
+				scratch ? `${name(winner === b.a ? b.b : b.a)} did not show` : (DECISION_NAMES[decision] && decision !== 'points' ? DECISION_NAMES[decision] : ''),
+				cards[0] && `${name(b.a)}: ${cards[0]}`,
+				cards[1] && `${name(b.b)}: ${cards[1]}`,
+			].filter(Boolean).join('; ');
 			rows.push({
+				event_name: event.name,
+				event_tier: event.tier,
+				division: (b.result.division ?? '').toLowerCase(),
+				bout_id: `B${b.id}`,
+				date: at ? `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}` : '',
+				time: at ? `${pad2(at.getHours())}:${pad2(at.getMinutes())}` : '',
+				stage: g.robin ? 'pool' : 'bracket',
+				pool: g.robin ? poolLetter(g.name) : '',
+				round: g.robin ? Math.floor(i / perRound) + 1 : bracketRound,
+				play_order: g.robin ? (i % perRound) + 1 : i + 1,
+				bout_label: g.robin ? '' : boutLabel(g.name),
+				fighter_a: name(b.a),
+				fighter_b: name(b.b),
+				charter_a: '',
+				charter_b: '',
+				score_a: scratch ? '' : b.result.scores[0],
+				score_b: scratch ? '' : b.result.scores[1],
+				winner: winner === null ? 'draw' : winner === b.a ? 'A' : 'B',
+				result_type: scratch ? 'scratch' : decision === 'forfeit' ? 'forfeit' : 'normal',
+				notes,
 				group: g.name,
-				bout: n,
-				fighterA: name(b.a),
-				fighterB: name(b.b),
-				scoreA: scores[0],
-				scoreB: scores[1],
-				winner: winner === null ? '' : name(winner),
-				loser: winner === null ? '' : name(winner === b.a ? b.b : b.a),
-				decision: b.result.decision ?? '',
-				cardsA: cardsText(b.result.cards?.[0]),
-				cardsB: cardsText(b.result.cards?.[1]),
-				division: b.result.division ?? '',
-				recordedAt: b.result.at ? new Date(b.result.at).toISOString() : '',
 			});
-		}
+		});
 	}
 	return rows;
 }
 
 const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
 
-/** The results as a CSV that opens in Excel or Google Sheets; Score is in Challonge's "A-B" form. */
+/** Columns of the results CSV, as the rankings importer expects them. */
+const RESULT_COLUMNS = ['event_name', 'event_tier', 'division', 'bout_id', 'date', 'time', 'stage', 'pool', 'round', 'play_order', 'bout_label',
+	'fighter_a', 'fighter_b', 'charter_a', 'charter_b', 'score_a', 'score_b', 'winner', 'result_type', 'notes'];
+
+/** The results as a CSV in the rankings format; it opens in Excel or Google Sheets too. */
 function resultsToCSV(pool) {
-	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Cards A', 'Cards B', 'Division', 'Recorded at'];
-	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, r.scoreA === '' ? '' : `${r.scoreA}-${r.scoreB}`,
-		r.winner, r.loser, r.decision, r.cardsA, r.cardsB, r.division, r.recordedAt]);
-	return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+	return [RESULT_COLUMNS, ...resultRows(pool).map(r => RESULT_COLUMNS.map(c => r[c]))].map(r => r.map(csvCell).join(',')).join('\n');
 }
 
 /**
@@ -2099,6 +2145,7 @@ function resultsToJSON(pool, exportedAt = Date.now()) {
 		format: 'tsl-results',
 		version: 1,
 		exportedAt: new Date(exportedAt).toISOString(),
+		event: { ...pool.event },
 		groups: pool.groups.map(g => ({
 			name: g.name,
 			fighters: g.fighters.map(name),
@@ -2903,6 +2950,11 @@ function renderPool(s) {
 		${body}
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="e.g. Cavalry Cup III Standard" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="e.g. Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
 				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
@@ -3404,6 +3456,11 @@ app.addEventListener('change', e => {
 	} finally {
 		tallyEditing = false;
 	}
+});
+
+poolDialog.addEventListener('change', e => {
+	const key = e.target.dataset.event;
+	if (key) store.setPoolEvent({ [key]: e.target.value });
 });
 
 // Settings fields apply as soon as they change.

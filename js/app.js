@@ -594,6 +594,11 @@ function renderPool(s) {
 		${body}
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="e.g. Cavalry Cup III Standard" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="e.g. Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
 				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
@@ -1095,6 +1100,11 @@ app.addEventListener('change', e => {
 	} finally {
 		tallyEditing = false;
 	}
+});
+
+poolDialog.addEventListener('change', e => {
+	const key = e.target.dataset.event;
+	if (key) store.setPoolEvent({ [key]: e.target.value });
 });
 
 // Settings fields apply as soon as they change.
