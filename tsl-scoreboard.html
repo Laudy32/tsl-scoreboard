@@ -2453,11 +2453,13 @@ store.undoStack = loaded.undo;
 
 // The club roster lives in its own key: it is large and never part of undo.
 const ROSTER_KEY = 'tsl_roster';
-let roster = [];
+/** A roster built into a shared copy (`npm run build:single -- --roster file.csv`); empty here. */
+const BUNDLED_ROSTER = [];
+let roster = BUNDLED_ROSTER;
 try {
-	roster = JSON.parse(localStorage.getItem(ROSTER_KEY)) ?? [];
+	roster = JSON.parse(localStorage.getItem(ROSTER_KEY)) ?? BUNDLED_ROSTER;
 } catch {
-	roster = [];
+	roster = BUNDLED_ROSTER;
 }
 store.setRoster(roster);
 let lastSaved = '';
@@ -3302,8 +3304,8 @@ function saveRoster(list) {
 	roster = list;
 	store.setRoster(roster);
 	try {
-		if (roster.length) localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
-		else localStorage.removeItem(ROSTER_KEY);
+		// Kept even when empty, so a cleared roster doesn't come back from a built-in one.
+		localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
 	} catch {
 		// Storage full or blocked: the roster lasts until the page is closed.
 	}
