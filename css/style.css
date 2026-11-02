@@ -460,6 +460,7 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 .preset.on strong { color: var(--gold); }
 .small-note { font-size: 14px; margin: 8px 0 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.inline + .chips { margin-top: 10px; }
 .chip {
 	display: inline-flex;
 	align-items: stretch;

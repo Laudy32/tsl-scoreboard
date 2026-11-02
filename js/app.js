@@ -603,14 +603,15 @@ function renderPool(s) {
 			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
 			<datalist id="pool-charters">${pickCharters(p).map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
 			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
-			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
-			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
-		</section>
-		<section>
 			<h3>Fighters</h3>
 			<span class="inline"><input id="pool-fighter" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-fighter-add">Add</button></span>
 			${members.length ? `<div class="chips">${chips}</div>` : ''}
 			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Make pool matchups</button></div>' : ''}
+		</section>
+		<section>
+			<h3>Matchups</h3>
+			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
+			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
 		</section>
 		${g.robin ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${mine.some(b => b.result || b.id === p.active) ? '' : `<div class="row"><button type="button" class="btn danger" data-action="pool-group-remove" data-id="${g.id}">Delete ${esc(g.name)}</button></div>`}`;
