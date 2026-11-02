@@ -377,6 +377,13 @@ export class Store {
 		this.undoStack = [];
 		this.now = now;
 		this.listeners = new Set();
+		/** The club roster by lowercase name: { name, charter }. Kept outside the state so undo snapshots stay small. */
+		this.roster = new Map();
+	}
+
+	/** Sets the club roster that new pool fighters take their spelling and charter from. */
+	setRoster(list) {
+		this.roster = new Map((list ?? []).map(r => [r.name.toLowerCase(), r]));
 	}
 
 	subscribe(fn) {
@@ -941,11 +948,13 @@ export class Store {
 
 	/** The pool fighter with this name (any capitalisation), added if new. Returns its id, or null for a blank name. */
 	#poolFighter(s, name) {
-		const clean = String(name).trim().slice(0, 40);
+		const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 		if (!clean) return null;
 		const found = s.pool.fighters.find(f => f.name.toLowerCase() === clean.toLowerCase());
 		if (found) return found.id;
-		s.pool.fighters.push({ id: s.pool.nextId, name: clean, cards: noCards() });
+		// A fighter on the roster gets the roster's spelling and charter.
+		const listed = this.roster.get(clean.toLowerCase());
+		s.pool.fighters.push({ id: s.pool.nextId, name: listed?.name ?? clean, ...(listed?.charter ? { charter: listed.charter } : {}), cards: noCards() });
 		return s.pool.nextId++;
 	}
 
@@ -1351,6 +1360,48 @@ export function describeEvent(s, e) {
 	}
 }
 
+/** Splits one CSV line into cells, allowing quoted cells with commas and "" for a quote. */
+function csvCells(line) {
+	const cells = [];
+	let cell = '';
+	let quoted = false;
+	for (let i = 0; i < line.length; i++) {
+		const c = line[i];
+		if (quoted) {
+			if (c === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+			else if (c === '"') quoted = false;
+			else cell += c;
+		} else if (c === '"') quoted = true;
+		else if (c === ',') { cells.push(cell); cell = ''; }
+		else cell += c;
+	}
+	cells.push(cell);
+	return cells.map(v => v.trim());
+}
+
+/**
+ * Reads a roster file: a CSV with a name column (name, fighter or player) and,
+ * optionally, a charter column (charter or group, as in the rankings' ladder.csv),
+ * or just one name per line. Returns [{ name, charter }], one per name, sorted by name.
+ */
+export function parseRoster(text) {
+	const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+	if (!lines.length) return [];
+	const head = csvCells(lines[0]).map(h => h.toLowerCase());
+	let nameCol = head.findIndex(h => ['name', 'fighter', 'player'].includes(h));
+	const charterCol = head.findIndex(h => ['charter', 'group'].includes(h));
+	const body = nameCol >= 0 ? lines.slice(1) : lines;
+	if (nameCol < 0) nameCol = 0;
+	const byName = new Map();
+	for (const line of body) {
+		const cells = csvCells(line);
+		const name = (cells[nameCol] ?? '').replace(/\s+/g, ' ').slice(0, 40);
+		if (!name || byName.has(name.toLowerCase())) continue;
+		byName.set(name.toLowerCase(), { name, charter: charterCol >= 0 ? cells[charterCol] ?? '' : '' });
+	}
+	return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Cards from a recorded bout as text, e.g. "Yellow (Foot fault), Red". */
 export function cardsText(cards = []) {
 	return cards.map(c => `${CARD_NAMES[c.card] ?? c.card}${c.reason ? ` (${c.reason})` : ''}`).join(', ');
@@ -1414,6 +1465,7 @@ const poolLetter = name => name.match(/^pool\s+(\S+)$/i)?.[1] ?? name;
  */
 export function resultRows(pool) {
 	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
 	const event = pool.event ?? { name: '', tier: '' };
 	const rows = [];
 	let bracketRound = 0;
@@ -1447,8 +1499,8 @@ export function resultRows(pool) {
 				bout_label: g.robin ? '' : boutLabel(g.name),
 				fighter_a: name(b.a),
 				fighter_b: name(b.b),
-				charter_a: '',
-				charter_b: '',
+				charter_a: charter(b.a),
+				charter_b: charter(b.b),
 				score_a: scratch ? '' : b.result.scores[0],
 				score_b: scratch ? '' : b.result.scores[1],
 				winner: winner === null ? 'draw' : winner === b.a ? 'A' : 'B',
@@ -1488,7 +1540,7 @@ export function resultsToJSON(pool, exportedAt = Date.now()) {
 			fighters: g.fighters.map(name),
 			unfought: pool.bouts.filter(b => b.group === g.id && !b.result && b.id !== pool.active).map(b => [name(b.a), name(b.b)]),
 		})),
-		fighters: pool.fighters.map(f => ({ name: f.name, cards: { ...f.cards } })),
+		fighters: pool.fighters.map(f => ({ name: f.name, charter: f.charter ?? '', cards: { ...f.cards } })),
 		bouts: resultRows(pool),
 	};
 }

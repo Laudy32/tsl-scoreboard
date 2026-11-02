@@ -45,6 +45,11 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
+- Roster: import the club roster once (the rankings' `ladder.csv`, any CSV
+  with a name column and an optional charter or group column, or one name
+  per line). Matchup names then autofill from it and take its exact
+  spelling and charter; a name not on it is added as typed. The roster is
+  kept on the device, apart from the scoreboard's undo history
 - Results download from Matchups:
   - Table cards as a Word file in the club's table card layout: a page per
     group, a band per match, points, winner (with how it was won), warnings

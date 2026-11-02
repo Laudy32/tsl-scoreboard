@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
 	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
-	resultRows, resultsToCSV, resultsToJSON, tableCardGroups,
+	resultRows, resultsToCSV, resultsToJSON, tableCardGroups, parseRoster,
 } from '../js/state.js';
 import { tableCardsDocx } from '../js/tablecards.js';
 
@@ -1392,4 +1392,29 @@ test('table cards: every matchup in order, filled in once fought, and a Word fil
 	const text = new TextDecoder().decode(docx);
 	for (const part of ['[Content_Types].xml', 'word/document.xml', 'Yellow (Foot fault)', 'FIGHTERS ADVANCING', '2026-11-02']) assert.ok(text.includes(part), part);
 	assert.ok(!text.includes('emblem.png'), 'no logo given, none linked');
+});
+
+test('roster: reads the ladder CSV or a plain list of names', () => {
+	const ladder = '\uFEFFrank,name,rating,group\r\n1,"LeGault, Ryan",1541.02,Tennessee\r\n2,Joseph  Kim,1265.84,"Cal ""North"""\r\n3,joseph kim,1200,X\r\n\r\n';
+	assert.deepEqual(parseRoster(ladder), [
+		{ name: 'Joseph Kim', charter: 'Cal "North"' },
+		{ name: 'LeGault, Ryan', charter: 'Tennessee' },
+	], 'quoted cells, extra spaces, and the first of two spellings of one name');
+	assert.deepEqual(parseRoster('Ana Reyes\nBo Chen\n'), [{ name: 'Ana Reyes', charter: '' }, { name: 'Bo Chen', charter: '' }]);
+	assert.deepEqual(parseRoster(''), []);
+});
+
+test('roster: a fighter picked from it gets its spelling and charter, and the export carries the charter', () => {
+	const { store, s } = setup();
+	store.setRoster(parseRoster('name,group\nJose Alberto Romero,Tennessee\nStevie Reyes,Kentucky'));
+	assert.equal(store.addPoolBout('jose alberto  romero', 'New Person'), true);
+	const [a, b] = s().pool.fighters;
+	assert.deepEqual([a.name, a.charter], ['Jose Alberto Romero', 'Tennessee']);
+	assert.deepEqual([b.name, b.charter], ['New Person', undefined], 'a name not on the roster is added as typed');
+	store.loadPoolBout(1);
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.recordPoolBout();
+	const row = resultRows(s().pool)[0];
+	assert.deepEqual([row.charter_a, row.charter_b], ['Tennessee', '']);
+	assert.equal(JSON.stringify(s()).includes('Stevie'), false, 'the roster is not saved in the state or its undo');
 });

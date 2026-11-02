@@ -2,7 +2,7 @@ import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV, resultsToCSV, resultsToJSON,
 	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
-	CARD_REASONS, CARD_NAMES, hasCards, tableCardGroups,
+	CARD_REASONS, CARD_NAMES, hasCards, tableCardGroups, parseRoster,
 } from './state.js';
 import { tableCardsDocx } from './tablecards.js';
 
@@ -28,6 +28,16 @@ function load() {
 const loaded = load();
 const store = new Store(loaded.state);
 store.undoStack = loaded.undo;
+
+// The club roster lives in its own key: it is large and never part of undo.
+const ROSTER_KEY = 'tsl_roster';
+let roster = [];
+try {
+	roster = JSON.parse(localStorage.getItem(ROSTER_KEY)) ?? [];
+} catch {
+	roster = [];
+}
+store.setRoster(roster);
 let lastSaved = '';
 
 store.subscribe(() => {
@@ -550,6 +560,12 @@ function nameEditor(kind, id, name, normal) {
 	return `<span class="inline rename"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" /><button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
 }
 
+/** Names offered when entering a matchup: this event's fighters first, then the roster. */
+function pickNames(p) {
+	const seen = new Set(p.fighters.map(f => f.name.toLowerCase()));
+	return [...p.fighters.map(f => f.name), ...roster.map(r => r.name).filter(n => !seen.has(n.toLowerCase()))];
+}
+
 function renderPool(s) {
 	const p = s.pool;
 	const g = p.groups.find(x => x.id === p.view);
@@ -576,7 +592,7 @@ function renderPool(s) {
 		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
 			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
-			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
+			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
 			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
@@ -592,11 +608,19 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		<section>
+			<h3>Roster${roster.length ? ` · ${roster.length}` : ''}</h3>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="roster-import">Import roster</button>
+				${roster.length ? '<button type="button" class="btn" data-action="roster-clear">Clear roster</button>' : ''}
+				<input type="file" id="roster-file" accept=".csv,.txt,text/csv,text/plain" hidden />
+			</div>
+		</section>
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
 			<div class="event-fields">
-				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="e.g. Cavalry Cup III Standard" autocomplete="off" /></label>
-				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="e.g. Regional" autocomplete="off" /></label>
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
 				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
 			</div>
 			<div class="row wrap">
@@ -844,6 +868,27 @@ function exportResults(kind) {
 	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
 }
 
+function saveRoster(list) {
+	roster = list;
+	store.setRoster(roster);
+	try {
+		if (roster.length) localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
+		else localStorage.removeItem(ROSTER_KEY);
+	} catch {
+		// Storage full or blocked: the roster lasts until the page is closed.
+	}
+	refreshPool();
+}
+
+async function importRoster(file) {
+	const list = parseRoster(await file.text());
+	if (!list.length) {
+		await confirmAction('No names found in that file. Use a CSV with a name column, or one name per line.', 'OK');
+		return;
+	}
+	saveRoster(list);
+}
+
 async function exportTableCards() {
 	let logo = null;
 	try {
@@ -883,6 +928,10 @@ const actions = {
 	'results-csv': () => exportResults('csv'),
 	'results-json': () => exportResults('json'),
 	'results-docx': exportTableCards,
+	'roster-import': () => $('#roster-file').click(),
+	'roster-clear': async () => {
+		if (await confirmAction(`Clear the roster of ${roster.length} fighters? Fighters already in matchups stay.`, 'Clear')) saveRoster([]);
+	},
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };
@@ -1103,6 +1152,12 @@ app.addEventListener('change', e => {
 });
 
 poolDialog.addEventListener('change', e => {
+	if (e.target.id === 'roster-file') {
+		const [file] = e.target.files;
+		e.target.value = '';
+		if (file) importRoster(file);
+		return;
+	}
 	const key = e.target.dataset.event;
 	if (key) store.setPoolEvent({ [key]: e.target.value });
 });
