@@ -344,6 +344,20 @@ export function poolStandings(pool, groupId = null) {
 	return table;
 }
 
+/**
+ * The club's pool card orders, by pool size: [a, b] seed numbers from 1, two
+ * bouts a round (2023 Standard table cards). Sizes not listed use roundRobin.
+ */
+export const POOL_CARD_ORDERS = {
+	4: [[2, 3], [4, 1], [1, 2], [3, 4], [4, 2], [3, 1]],
+};
+
+/** A pool's bouts for fighters in seed order: the club's card order for that size, or roundRobin. */
+export function poolOrder(ids) {
+	const card = POOL_CARD_ORDERS[ids.length];
+	return card ? card.map(([a, b]) => [ids[a - 1], ids[b - 1]]) : roundRobin(ids);
+}
+
 /** Every pairing once, ordered so fighters rest between bouts (the circle method). Returns [a, b] id pairs. */
 export function roundRobin(ids) {
 	const list = [...ids];
@@ -1104,7 +1118,7 @@ export class Store {
 			if (!g) return false;
 			const mine = s.pool.bouts.filter(b => b.group === g.id);
 			const have = new Set(mine.map(b => [b.a, b.b].sort().join('-')));
-			const missing = roundRobin(g.fighters).filter(p => !have.has([...p].sort().join('-')));
+			const missing = poolOrder(g.fighters).filter(p => !have.has([...p].sort().join('-')));
 			if (!missing.length) return false;
 			g.robin = true;
 			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
@@ -1438,6 +1452,9 @@ export function tableCardGroups(pool) {
 			charters: g.fighters.map(charter),
 			bouts: bouts.map((b, i) => ({
 				number: i + 1,
+				// A round robin plays half the fighters' worth of bouts a round, as in the export.
+				round: g.robin ? Math.floor(i / Math.max(1, Math.floor(g.fighters.length / 2))) + 1 : null,
+				seeds: [b.a, b.b].map(id => g.fighters.indexOf(id) + 1),
 				fighters: [name(b.a), name(b.b)],
 				charters: [charter(b.a), charter(b.b)],
 				result: b.result && {

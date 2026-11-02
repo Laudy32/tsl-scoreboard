@@ -589,7 +589,7 @@ function renderPool(s) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
-		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}">${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const chips = members.map((f, i) => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}"><span class="chip-seed">${i + 1}</span> ${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
@@ -605,9 +605,13 @@ function renderPool(s) {
 			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
-			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
 		</section>
-		${members.length ? `<section><h3>Fighters</h3><div class="chips">${chips}</div></section>` : ''}
+		<section>
+			<h3>Fighters</h3>
+			<span class="inline"><input id="pool-fighter" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-fighter-add">Add</button></span>
+			${members.length ? `<div class="chips">${chips}</div>` : ''}
+			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Make pool matchups</button></div>' : ''}
+		</section>
 		${g.robin ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${mine.some(b => b.result || b.id === p.active) ? '' : `<div class="row"><button type="button" class="btn danger" data-action="pool-group-remove" data-id="${g.id}">Delete ${esc(g.name)}</button></div>`}`;
 	}
@@ -1017,6 +1021,11 @@ const actions = {
 		store.removePoolFighter(+el.dataset.id);
 		refreshPool();
 	},
+	'pool-fighter-add': () => {
+		if (!store.addPoolFighter($('#pool-fighter').value)) return;
+		refreshPool();
+		$('#pool-fighter').focus();
+	},
 	'pool-bout-add': () => {
 		if (!store.addPoolBout($('#pool-a').value, $('#pool-b').value)) return;
 		refreshPool();
@@ -1231,6 +1240,9 @@ poolDialog.addEventListener('keydown', e => {
 	} else if (e.target.id === 'pool-group-name') {
 		e.preventDefault();
 		actions['pool-group-add']();
+	} else if (e.target.id === 'pool-fighter') {
+		e.preventDefault();
+		actions['pool-fighter-add']();
 	} else if (e.target.id === 'pool-a' || e.target.id === 'pool-b') {
 		e.preventDefault();
 		if (e.target.id === 'pool-a' && !$('#pool-b').value) $('#pool-b').focus();

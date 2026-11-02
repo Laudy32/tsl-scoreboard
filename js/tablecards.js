@@ -75,7 +75,10 @@ function docxGroup(g, { date, logo, index }) {
 		const r = b.result;
 		// A no-show match is crossed out: no points, just who didn't show.
 		const crossed = r?.noShow;
-		const label = `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
+		// A pool's band names the round and the fighters' numbers, as on the paper pool card.
+		const label = b.round
+			? `${g.name} / Round ${b.round} / Match ${b.number}: ${b.seeds[0]} ${b.fighters[0]} vs ${b.seeds[1]} ${b.fighters[1]}`
+			: `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
 		const band = [[label, { bold: true, color: 'FFFFFF', strike: crossed }], ...(crossed ? [['   NO-SHOW', { bold: true, color: 'FFFFFF' }]] : [])];
 		rows.push(docxRow([docxCell(DOCX_COLS.reduce((a, c) => a + c, 0), docxPara(band), { fill: DOCX_GOLD, span: 5 })], 360));
 		b.fighters.forEach((f, i) => {

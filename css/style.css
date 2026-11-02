@@ -647,6 +647,7 @@ body[data-view=display] {
 .inline.rename input { flex: 1; min-width: 0; }
 .inline.rename.with-charter { flex-wrap: wrap; width: 100%; }
 .inline.rename.with-charter #pool-rename { flex-basis: 100%; }
+.chip-seed { color: var(--gold); font-weight: 700; }
 .chip-charter { color: var(--muted); font-size: 0.85em; }
 .tied { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--gold); color: #16120a; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; vertical-align: 2px; }
 button.chip-label { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }

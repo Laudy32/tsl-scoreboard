@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
 	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
-	resultRows, resultsToCSV, resultsToJSON, tableCardGroups, parseRoster,
+	resultRows, resultsToCSV, resultsToJSON, tableCardGroups, parseRoster, poolOrder,
 } from '../js/state.js';
 import { tableCardsDocx } from '../js/tablecards.js';
 
@@ -1381,6 +1381,8 @@ test('table cards: every matchup in order, filled in once fought, and a Word fil
 	const name = id => s().pool.fighters.find(f => f.id === id).name;
 	assert.deepEqual(g.bouts[0], {
 		number: 1,
+		round: 1,
+		seeds: [g.fighters.indexOf(name(b1.a)) + 1, g.fighters.indexOf(name(b1.b)) + 1],
 		fighters: [name(b1.a), name(b1.b)],
 		charters: ['', ''],
 		result: { noShow: false, scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
@@ -1424,4 +1426,18 @@ test('roster: a fighter picked from it gets its spelling and charter, and the ex
 	assert.deepEqual([row.charter_a, row.charter_b], ['Tennessee', 'Rebel Sabers']);
 	assert.deepEqual(tableCardGroups(s().pool)[0].bouts[0].charters, ['Tennessee', 'Rebel Sabers']);
 	assert.equal(JSON.stringify(s()).includes('Stevie'), false, 'the roster is not saved in the state or its undo');
+});
+
+test('pool: four fighters follow the club pool card order; other sizes use the round robin', () => {
+	assert.deepEqual(poolOrder([1, 2, 3, 4]), [[2, 3], [4, 1], [1, 2], [3, 4], [4, 2], [3, 1]]);
+	assert.deepEqual(poolOrder([1, 2, 3]), roundRobin([1, 2, 3]));
+	const { store, s } = setup();
+	store.addPoolGroup('Pool A');
+	['Ana', 'Bo', 'Cy', 'Di'].forEach(n => store.addPoolFighter(n));
+	assert.equal(store.buildPoolBouts(), true);
+	const name = id => s().pool.fighters.find(f => f.id === id).name;
+	assert.deepEqual(s().pool.bouts.map(b => `${name(b.a)}-${name(b.b)}`), ['Bo-Cy', 'Di-Ana', 'Ana-Bo', 'Cy-Di', 'Di-Bo', 'Cy-Ana']);
+	const card = tableCardGroups(s().pool)[0].bouts;
+	assert.deepEqual(card.map(b => [b.round, ...b.seeds]), [[1, 2, 3], [1, 4, 1], [2, 1, 2], [2, 3, 4], [3, 4, 2], [3, 3, 1]], 'rounds and fighter numbers as on the card');
+	assert.ok(new TextDecoder().decode(tableCardsDocx(tableCardGroups(s().pool))).includes('Pool A / Round 1 / Match 1: 2 Bo vs 3 Cy'));
 });
