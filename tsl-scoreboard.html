@@ -2303,11 +2303,12 @@ function docxLogo(id) {
 const docxBlank = '________________________________';
 
 /** One group's card. */
-function docxGroup(g, { date, logo, index }) {
+function docxGroup(g, { date, logo, index, event }) {
 	const title = [g.division, g.name].filter(Boolean).join(' – ').toUpperCase();
 	const type = g.robin ? `POOL – ${g.fighters.length} FIGHTERS` : `MATCHES – ${g.bouts.length}`;
 	const heading = [
 		docxPara([[title, { bold: true, size: 28 }]]),
+		...(event?.name ? [docxPara([['EVENT: ', { bold: true }], [[event.name, event.tier && `(${event.tier})`].filter(Boolean).join(' ')]], { before: 60 })] : []),
 		docxPara([['DATE: ', { bold: true }], [date]], { before: 60 }),
 		docxPara([['TYPE: ', { bold: true }], [type]], { before: 60 }),
 		docxPara([['START TIME: ', { bold: true }], ['________']], { before: 60 }),
@@ -2434,7 +2435,7 @@ function docxZip(files) {
  * The table cards for these groups (from tableCardGroups) as .docx bytes.
  * `logo` is the club emblem as PNG bytes, or null to leave it out.
  */
-function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), logo = null } = {}) {
+function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), logo = null, event = null } = {}) {
 	const files = {
 		'[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
@@ -2442,7 +2443,7 @@ function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), 
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
 		'word/_rels/document.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${logo ? '<Relationship Id="rLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/emblem.png"/>' : ''}</Relationships>`,
-		'word/document.xml': docxDocument(groups, { date, logo: !!logo }),
+		'word/document.xml': docxDocument(groups, { date, logo: !!logo, event }),
 	};
 	if (logo) files['word/media/emblem.png'] = logo;
 	return docxZip(files);
@@ -3061,6 +3062,11 @@ function renderPool(s) {
 	return `<form method="dialog" class="sheet-body">
 		<header class="sheet-head"><h2>Matchups</h2><button class="btn small" value="close">Done</button></header>
 		<section>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
 			${tabs ? `<div class="chips">${tabs}</div>` : ''}
 			${groupAdd}
 		</section>
@@ -3075,11 +3081,6 @@ function renderPool(s) {
 		</section>
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
-			<div class="event-fields">
-				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
-				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
-				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
-			</div>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
 				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
@@ -3354,7 +3355,7 @@ async function exportTableCards() {
 		// No emblem (offline before it was cached): the cards still work without it.
 	}
 	const today = new Date().toISOString().slice(0, 10);
-	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo });
+	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo, event: store.state.pool.event });
 	download(docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `tsl-table-cards-${today}.docx`);
 }
 

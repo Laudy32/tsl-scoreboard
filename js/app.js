@@ -618,6 +618,11 @@ function renderPool(s) {
 	return `<form method="dialog" class="sheet-body">
 		<header class="sheet-head"><h2>Matchups</h2><button class="btn small" value="close">Done</button></header>
 		<section>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
 			${tabs ? `<div class="chips">${tabs}</div>` : ''}
 			${groupAdd}
 		</section>
@@ -632,11 +637,6 @@ function renderPool(s) {
 		</section>
 		${p.groups.length ? `<section>
 			<h3>Results</h3>
-			<div class="event-fields">
-				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
-				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
-				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
-			</div>
 			<div class="row wrap">
 				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
 				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
@@ -911,7 +911,7 @@ async function exportTableCards() {
 		// No emblem (offline before it was cached): the cards still work without it.
 	}
 	const today = new Date().toISOString().slice(0, 10);
-	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo });
+	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo, event: store.state.pool.event });
 	download(docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `tsl-table-cards-${today}.docx`);
 }
 

@@ -1439,5 +1439,7 @@ test('pool: four fighters follow the club pool card order; other sizes use the r
 	assert.deepEqual(s().pool.bouts.map(b => `${name(b.a)}-${name(b.b)}`), ['Bo-Cy', 'Di-Ana', 'Ana-Bo', 'Cy-Di', 'Di-Bo', 'Cy-Ana']);
 	const card = tableCardGroups(s().pool)[0].bouts;
 	assert.deepEqual(card.map(b => [b.round, ...b.seeds]), [[1, 2, 3], [1, 4, 1], [2, 1, 2], [2, 3, 4], [3, 4, 2], [3, 3, 1]], 'rounds and fighter numbers as on the card');
-	assert.ok(new TextDecoder().decode(tableCardsDocx(tableCardGroups(s().pool))).includes('Pool A / Round 1 / Match 1: 2 Bo vs 3 Cy'));
+	const xml = new TextDecoder().decode(tableCardsDocx(tableCardGroups(s().pool), { event: { name: 'Cavalry Cup III', tier: 'Regional' } }));
+	assert.ok(xml.includes('Pool A / Round 1 / Match 1: 2 Bo vs 3 Cy'));
+	assert.ok(xml.includes('Cavalry Cup III (Regional)'), 'the event is on every card');
 });
