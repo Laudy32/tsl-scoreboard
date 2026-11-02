@@ -649,6 +649,7 @@ body[data-view=display] {
 .pool-actions { display: flex; gap: 6px; }
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
+.sheet-body section + .row { margin-top: 16px; }
 .inline.matchup + .pool-bouts { margin-top: 10px; }
 
 .group-title { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -939,6 +940,20 @@ function boutDecided(s, now = Date.now()) {
 
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
 const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/**
+ * How a decided bout was won, for the results export: 'points', 'sudden death',
+ * the judges' 'unanimous' or 'split' decision, 'marshal' (the Marshal picked the
+ * winner of a judges' draw), 'forfeit' (black card) or 'no-show'.
+ */
+function boutDecision(s) {
+	if (s.forfeit !== null && s.forfeit !== undefined) return s.noShow ? 'no-show' : 'forfeit';
+	if (s.tally?.published) {
+		const d = decisionOf(s.tally.votes);
+		return d === 'draw' ? 'marshal' : d;
+	}
+	return s.suddenDeath ? 'sudden death' : 'points';
+}
 
 /** A fighter who fights back to back gets this long to rest. */
 const REST_TIME = 60_000;
@@ -1785,6 +1800,9 @@ class Store {
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
+			decision: boutDecision(s),
+			division: s.settings.division,
+			at: this.now(),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1980,8 +1998,70 @@ function describeEvent(s, e) {
 	}
 }
 
+/**
+ * Every recorded pool bout, group by group in fighting order, as plain rows
+ * with names (not ids) so the results read the same in a spreadsheet, a
+ * Challonge upload or the rankings. Results saved before a field existed leave it ''.
+ */
+function resultRows(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const rows = [];
+	for (const g of pool.groups) {
+		let n = 0;
+		for (const b of pool.bouts) {
+			if (b.group !== g.id) continue;
+			n++;
+			if (!b.result) continue;
+			const { scores, winner } = b.result;
+			rows.push({
+				group: g.name,
+				bout: n,
+				fighterA: name(b.a),
+				fighterB: name(b.b),
+				scoreA: scores[0],
+				scoreB: scores[1],
+				winner: winner === null ? '' : name(winner),
+				loser: winner === null ? '' : name(winner === b.a ? b.b : b.a),
+				decision: b.result.decision ?? '',
+				division: b.result.division ?? '',
+				recordedAt: b.result.at ? new Date(b.result.at).toISOString() : '',
+			});
+		}
+	}
+	return rows;
+}
+
+const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
+
+/** The results as a CSV that opens in Excel or Google Sheets; Score is in Challonge's "A-B" form. */
+function resultsToCSV(pool) {
+	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Division', 'Recorded at'];
+	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, `${r.scoreA}-${r.scoreB}`,
+		r.winner, r.loser, r.decision, r.division, r.recordedAt]);
+	return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+}
+
+/**
+ * The results as JSON for other tools (a Challonge upload, the rankings): the
+ * same rows as the CSV, plus each fighter's cards and the matchups not fought yet.
+ */
+function resultsToJSON(pool, exportedAt = Date.now()) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	return {
+		format: 'tsl-results',
+		version: 1,
+		exportedAt: new Date(exportedAt).toISOString(),
+		groups: pool.groups.map(g => ({
+			name: g.name,
+			fighters: g.fighters.map(name),
+			unfought: pool.bouts.filter(b => b.group === g.id && !b.result && b.id !== pool.active).map(b => [name(b.a), name(b.b)]),
+		})),
+		fighters: pool.fighters.map(f => ({ name: f.name, cards: { ...f.cards } })),
+		bouts: resultRows(pool),
+	};
+}
+
 function logToCSV(s) {
-	const esc = v => `"${String(v).replace(/"/g, '""')}"`;
 	const rows = [['time', 'round', 'clock', 'event', s.fighters[0].name, s.fighters[1].name, 'simuls']];
 	for (const e of s.log) {
 		rows.push([
@@ -1994,7 +2074,7 @@ function logToCSV(s) {
 			e.simul,
 		]);
 	}
-	return rows.map(r => r.map(esc).join(',')).join('\n');
+	return rows.map(r => r.map(csvCell).join(',')).join('\n');
 }
 
 
@@ -2583,6 +2663,14 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		${p.bouts.some(b => b.result) ? `<section>
+			<h3>Results</h3>
+			<p class="muted">One row per bout fought, every group. Open the CSV in Excel or Google Sheets, or use it to enter scores in Challonge.</p>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="results-csv">Download results (CSV)</button>
+				<button type="button" class="btn" data-action="results-json">Download results (JSON)</button>
+			</div>
+		</section>` : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
@@ -2802,23 +2890,29 @@ function openDisplay() {
 	if (!win) setView('display');
 }
 
-function exportCSV() {
-	const blob = new Blob([logToCSV(store.state)], { type: 'text/csv' });
+function download(text, type, filename) {
 	const a = document.createElement('a');
-	const s = store.state;
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_');
+	a.href = URL.createObjectURL(new Blob([text], { type }));
+	a.download = filename;
 	a.click();
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function exportCSV() {
+	const s = store.state;
+	download(logToCSV(s), 'text/csv', `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_'));
+}
+
+function exportResults(kind) {
+	const pool = store.state.pool;
+	const name = `tsl-results-${new Date().toISOString().slice(0, 10)}.${kind}`;
+	if (kind === 'csv') download(resultsToCSV(pool), 'text/csv', name);
+	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
+}
+
 function saveBackup() {
-	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
-	const a = document.createElement('a');
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`;
-	a.click();
-	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+	const text = JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1);
+	download(text, 'application/json', `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`);
 }
 
 async function restoreBackup(file) {
@@ -2840,6 +2934,8 @@ async function restoreBackup(file) {
 const actions = {
 	'backup-save': saveBackup,
 	'backup-restore': () => $('#backup-file').click(),
+	'results-csv': () => exportResults('csv'),
+	'results-json': () => exportResults('json'),
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };

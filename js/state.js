@@ -280,6 +280,20 @@ export function boutDecided(s, now = Date.now()) {
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
 export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
 
+/**
+ * How a decided bout was won, for the results export: 'points', 'sudden death',
+ * the judges' 'unanimous' or 'split' decision, 'marshal' (the Marshal picked the
+ * winner of a judges' draw), 'forfeit' (black card) or 'no-show'.
+ */
+export function boutDecision(s) {
+	if (s.forfeit !== null && s.forfeit !== undefined) return s.noShow ? 'no-show' : 'forfeit';
+	if (s.tally?.published) {
+		const d = decisionOf(s.tally.votes);
+		return d === 'draw' ? 'marshal' : d;
+	}
+	return s.suddenDeath ? 'sudden death' : 'points';
+}
+
 /** A fighter who fights back to back gets this long to rest. */
 export const REST_TIME = 60_000;
 
@@ -1125,6 +1139,9 @@ export class Store {
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
+			decision: boutDecision(s),
+			division: s.settings.division,
+			at: this.now(),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1320,8 +1337,70 @@ export function describeEvent(s, e) {
 	}
 }
 
+/**
+ * Every recorded pool bout, group by group in fighting order, as plain rows
+ * with names (not ids) so the results read the same in a spreadsheet, a
+ * Challonge upload or the rankings. Results saved before a field existed leave it ''.
+ */
+export function resultRows(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const rows = [];
+	for (const g of pool.groups) {
+		let n = 0;
+		for (const b of pool.bouts) {
+			if (b.group !== g.id) continue;
+			n++;
+			if (!b.result) continue;
+			const { scores, winner } = b.result;
+			rows.push({
+				group: g.name,
+				bout: n,
+				fighterA: name(b.a),
+				fighterB: name(b.b),
+				scoreA: scores[0],
+				scoreB: scores[1],
+				winner: winner === null ? '' : name(winner),
+				loser: winner === null ? '' : name(winner === b.a ? b.b : b.a),
+				decision: b.result.decision ?? '',
+				division: b.result.division ?? '',
+				recordedAt: b.result.at ? new Date(b.result.at).toISOString() : '',
+			});
+		}
+	}
+	return rows;
+}
+
+const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
+
+/** The results as a CSV that opens in Excel or Google Sheets; Score is in Challonge's "A-B" form. */
+export function resultsToCSV(pool) {
+	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Division', 'Recorded at'];
+	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, `${r.scoreA}-${r.scoreB}`,
+		r.winner, r.loser, r.decision, r.division, r.recordedAt]);
+	return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+}
+
+/**
+ * The results as JSON for other tools (a Challonge upload, the rankings): the
+ * same rows as the CSV, plus each fighter's cards and the matchups not fought yet.
+ */
+export function resultsToJSON(pool, exportedAt = Date.now()) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	return {
+		format: 'tsl-results',
+		version: 1,
+		exportedAt: new Date(exportedAt).toISOString(),
+		groups: pool.groups.map(g => ({
+			name: g.name,
+			fighters: g.fighters.map(name),
+			unfought: pool.bouts.filter(b => b.group === g.id && !b.result && b.id !== pool.active).map(b => [name(b.a), name(b.b)]),
+		})),
+		fighters: pool.fighters.map(f => ({ name: f.name, cards: { ...f.cards } })),
+		bouts: resultRows(pool),
+	};
+}
+
 export function logToCSV(s) {
-	const esc = v => `"${String(v).replace(/"/g, '""')}"`;
 	const rows = [['time', 'round', 'clock', 'event', s.fighters[0].name, s.fighters[1].name, 'simuls']];
 	for (const e of s.log) {
 		rows.push([
@@ -1334,5 +1413,5 @@ export function logToCSV(s) {
 			e.simul,
 		]);
 	}
-	return rows.map(r => r.map(esc).join(',')).join('\n');
+	return rows.map(r => r.map(csvCell).join(',')).join('\n');
 }

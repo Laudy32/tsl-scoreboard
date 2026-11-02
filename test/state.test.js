@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
 	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
+	resultRows, resultsToCSV, resultsToJSON,
 } from '../js/state.js';
 
 const D = DEFAULT_SETTINGS.duration;
@@ -1256,4 +1257,65 @@ test('pool standings: a three-way tie in a circle falls to points for, then poin
 	const rows = poolStandings(pool);
 	// Each has one win and one win over a tied fighter, so points for decide: F1 has 12, F2 has 15 and F3 has 17.
 	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
+});
+
+test('results export: one row per bout fought, by name, with how it was won', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	const names = id => s().pool.fighters.find(f => f.id === id).name;
+	const [b1, b2] = s().pool.bouts;
+	store.loadPoolBout(b1.id);
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.addPoint(0);
+	store.swapSides();
+	store.recordPoolBout();
+	store.loadPoolBout(b2.id);
+	store.giveCard(0, 'black');
+	store.recordPoolBout();
+
+	const rows = resultRows(s().pool);
+	assert.equal(rows.length, 2, 'the bout not fought yet is left out');
+	assert.deepEqual(
+		{ ...rows[0], recordedAt: '' },
+		{ group: s().pool.groups[0].name, bout: 1, fighterA: names(b1.a), fighterB: names(b1.b), scoreA: 1, scoreB: 10,
+			winner: names(b1.b), loser: names(b1.a), decision: 'points', division: '', recordedAt: '' },
+	);
+	assert.match(rows[0].recordedAt, /^\d{4}-\d\d-\d\dT/);
+	assert.equal(rows[1].decision, 'forfeit');
+
+	const csv = resultsToCSV(s().pool).split('\n');
+	assert.equal(csv.length, 3);
+	assert.match(csv[0], /^"Group","Bout","Fighter A"/);
+	assert.match(csv[1], /"1-10"/, 'the score in Challonge form');
+
+	const json = resultsToJSON(s().pool, 0);
+	assert.equal(json.format, 'tsl-results');
+	assert.equal(json.bouts.length, 2);
+	assert.equal(json.groups[0].unfought.length, 1);
+	assert.equal(json.fighters.find(f => f.cards.black).name, s().pool.fighters.find(f => f.cards.black).name);
+});
+
+test('results export: Unity decisions, no-shows, and results saved before the export existed', () => {
+	const u = pool(['Ana', 'Bo'], {});
+	u.store.applyPreset('unity');
+	u.store.loadPoolBout(1);
+	u.store.setTally(0, 0, 9); u.store.setTally(0, 1, 5);
+	u.store.setTally(1, 0, 4); u.store.setTally(1, 1, 6);
+	u.store.setTally(2, 0, 8); u.store.setTally(2, 1, 6);
+	u.store.endRoundNow();
+	u.store.publishTally();
+	u.store.recordPoolBout();
+	assert.equal(resultRows(u.s().pool)[0].decision, 'split');
+
+	const n = pool(['Ana', 'Bo']);
+	n.store.loadPoolBout(1);
+	n.store.noShow(1);
+	n.store.recordPoolBout();
+	assert.equal(resultRows(n.s().pool)[0].decision, 'no-show');
+
+	const old = n.s().pool;
+	delete old.bouts[0].result.decision;
+	delete old.bouts[0].result.at;
+	const row = resultRows(old)[0];
+	assert.equal(row.decision, '');
+	assert.equal(row.recordedAt, '');
 });

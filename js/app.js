@@ -1,6 +1,6 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
-	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
+	formatClock, parseClock, fighterLabel, describeEvent, logToCSV, resultsToCSV, resultsToJSON,
 	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
 	CARD_REASONS, CARD_NAMES, hasCards,
 } from './state.js';
@@ -590,6 +590,14 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		${p.bouts.some(b => b.result) ? `<section>
+			<h3>Results</h3>
+			<p class="muted">One row per bout fought, every group. Open the CSV in Excel or Google Sheets, or use it to enter scores in Challonge.</p>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="results-csv">Download results (CSV)</button>
+				<button type="button" class="btn" data-action="results-json">Download results (JSON)</button>
+			</div>
+		</section>` : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
@@ -809,23 +817,29 @@ function openDisplay() {
 	if (!win) setView('display');
 }
 
-function exportCSV() {
-	const blob = new Blob([logToCSV(store.state)], { type: 'text/csv' });
+function download(text, type, filename) {
 	const a = document.createElement('a');
-	const s = store.state;
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_');
+	a.href = URL.createObjectURL(new Blob([text], { type }));
+	a.download = filename;
 	a.click();
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function exportCSV() {
+	const s = store.state;
+	download(logToCSV(s), 'text/csv', `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_'));
+}
+
+function exportResults(kind) {
+	const pool = store.state.pool;
+	const name = `tsl-results-${new Date().toISOString().slice(0, 10)}.${kind}`;
+	if (kind === 'csv') download(resultsToCSV(pool), 'text/csv', name);
+	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
+}
+
 function saveBackup() {
-	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
-	const a = document.createElement('a');
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`;
-	a.click();
-	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+	const text = JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1);
+	download(text, 'application/json', `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`);
 }
 
 async function restoreBackup(file) {
@@ -847,6 +861,8 @@ async function restoreBackup(file) {
 const actions = {
 	'backup-save': saveBackup,
 	'backup-restore': () => $('#backup-file').click(),
+	'results-csv': () => exportResults('csv'),
+	'results-json': () => exportResults('json'),
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };

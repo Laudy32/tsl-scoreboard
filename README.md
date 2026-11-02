@@ -45,6 +45,10 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
+- Results download from Matchups: one row per bout fought (group, fighters,
+  scores, the score in Challonge's "10-4" form, winner, how it was won,
+  division, time) as a CSV for Excel, Google Sheets or entering in Challonge,
+  or as JSON for other tools
 - Spectator display (Display button or F) that stays in sync with the
   controls, for a second monitor or TV on the same computer
 - Names, subtitles, seven colors, swap sides
@@ -64,8 +68,11 @@ different devices do not sync yet.
   page cannot message another device, and it would not work in the offline single file.
   Mirroring the screen was considered: it shows one screen only, so the controls would be
   on the TV too.
-- **Challonge export.** Download or copy pool and group results, keyed to participants, then
-  report results straight to Challonge through the same kind of relay.
+- **Send results to Challonge.** Each organizer pastes their own Challonge API key once (kept
+  on their device), picks the tournament, checks a preview that matches our fighters to
+  Challonge participants, and sends. It needs a small relay (for example a Cloudflare Worker)
+  because Challonge can't be called from a web page directly; the same relay could later
+  report each bout live.
 - **Standings on their own screen** (a separate view, so the TV scoreboard stays clear).
 - **Automatic single-elimination brackets** from a seeded list, with byes.
 - **Fighter roster** remembered between events, with autofill in Matchups.
