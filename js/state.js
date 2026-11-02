@@ -1142,6 +1142,10 @@ export class Store {
 			decision: boutDecision(s),
 			division: s.settings.division,
 			at: this.now(),
+			// Cards given in this bout (not taken back), for [a, b].
+			cards: [bout.a, bout.b].map(id => s.log
+				.filter(e => e.kind === 'card' && !e.voided && ids[e.side] === id)
+				.map(e => ({ card: e.effective, reason: e.reason ?? '' }))),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1337,6 +1341,45 @@ export function describeEvent(s, e) {
 	}
 }
 
+/** Cards from a recorded bout as text, e.g. "Yellow (Foot fault), Red". */
+export function cardsText(cards = []) {
+	return cards.map(c => `${CARD_NAMES[c.card] ?? c.card}${c.reason ? ` (${c.reason})` : ''}`).join(', ');
+}
+
+/** Readable names for how a bout was won, as written on the table cards. */
+export const DECISION_NAMES = {
+	points: 'Points', 'sudden death': 'Sudden death', unanimous: 'Unanimous decision', split: 'Split decision',
+	marshal: "Marshal's decision", forfeit: 'Forfeit', 'no-show': 'No-show',
+};
+
+/**
+ * What the table cards show, one entry per group: its fighters, every matchup
+ * in fighting order (with the result once recorded) and, for a round robin, the standings.
+ */
+export function tableCardGroups(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	return pool.groups.map(g => {
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		return {
+			name: g.name,
+			robin: !!g.robin,
+			division: bouts.find(b => b.result?.division)?.result.division ?? '',
+			fighters: g.fighters.map(name),
+			bouts: bouts.map((b, i) => ({
+				number: i + 1,
+				fighters: [name(b.a), name(b.b)],
+				result: b.result && {
+					scores: b.result.scores,
+					winner: b.result.winner === null ? null : b.result.winner === b.a ? 0 : 1,
+					decision: DECISION_NAMES[b.result.decision] ?? '',
+					cards: [0, 1].map(i => cardsText(b.result.cards?.[i])),
+				},
+			})),
+			standings: g.robin ? poolStandings(pool, g.id) : null,
+		};
+	});
+}
+
 /**
  * Every recorded pool bout, group by group in fighting order, as plain rows
  * with names (not ids) so the results read the same in a spreadsheet, a
@@ -1362,6 +1405,8 @@ export function resultRows(pool) {
 				winner: winner === null ? '' : name(winner),
 				loser: winner === null ? '' : name(winner === b.a ? b.b : b.a),
 				decision: b.result.decision ?? '',
+				cardsA: cardsText(b.result.cards?.[0]),
+				cardsB: cardsText(b.result.cards?.[1]),
 				division: b.result.division ?? '',
 				recordedAt: b.result.at ? new Date(b.result.at).toISOString() : '',
 			});
@@ -1374,9 +1419,9 @@ const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
 
 /** The results as a CSV that opens in Excel or Google Sheets; Score is in Challonge's "A-B" form. */
 export function resultsToCSV(pool) {
-	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Division', 'Recorded at'];
+	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Cards A', 'Cards B', 'Division', 'Recorded at'];
 	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, `${r.scoreA}-${r.scoreB}`,
-		r.winner, r.loser, r.decision, r.division, r.recordedAt]);
+		r.winner, r.loser, r.decision, r.cardsA, r.cardsB, r.division, r.recordedAt]);
 	return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
 }
 

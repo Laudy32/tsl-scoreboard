@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
 	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
-	resultRows, resultsToCSV, resultsToJSON,
+	resultRows, resultsToCSV, resultsToJSON, tableCardGroups,
 } from '../js/state.js';
+import { tableCardsDocx } from '../js/tablecards.js';
 
 const D = DEFAULT_SETTINGS.duration;
 
@@ -1277,10 +1278,11 @@ test('results export: one row per bout fought, by name, with how it was won', ()
 	assert.deepEqual(
 		{ ...rows[0], recordedAt: '' },
 		{ group: s().pool.groups[0].name, bout: 1, fighterA: names(b1.a), fighterB: names(b1.b), scoreA: 1, scoreB: 10,
-			winner: names(b1.b), loser: names(b1.a), decision: 'points', division: '', recordedAt: '' },
+			winner: names(b1.b), loser: names(b1.a), decision: 'points', cardsA: '', cardsB: '', division: '', recordedAt: '' },
 	);
 	assert.match(rows[0].recordedAt, /^\d{4}-\d\d-\d\dT/);
 	assert.equal(rows[1].decision, 'forfeit');
+	assert.equal(rows[1].cardsA, 'Black', 'the card goes with the fighter it was given to');
 
 	const csv = resultsToCSV(s().pool).split('\n');
 	assert.equal(csv.length, 3);
@@ -1318,4 +1320,34 @@ test('results export: Unity decisions, no-shows, and results saved before the ex
 	const row = resultRows(old)[0];
 	assert.equal(row.decision, '');
 	assert.equal(row.recordedAt, '');
+});
+
+test('table cards: every matchup in order, filled in once fought, and a Word file that holds them', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	const [b1] = s().pool.bouts;
+	store.loadPoolBout(b1.id);
+	store.giveCard(1, 'yellow', 'Foot fault');
+	store.giveCard(1, 'red', 'Other');
+	store.removeCard(1, 'red');
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.swapSides();
+	store.recordPoolBout();
+
+	const [g] = tableCardGroups(s().pool);
+	assert.equal(g.robin, true);
+	assert.equal(g.bouts.length, 3);
+	const name = id => s().pool.fighters.find(f => f.id === id).name;
+	assert.deepEqual(g.bouts[0], {
+		number: 1,
+		fighters: [name(b1.a), name(b1.b)],
+		result: { scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
+	}, 'a card taken back is left off');
+	assert.equal(g.bouts[1].result, null);
+	assert.equal(g.standings[0].name, name(b1.a));
+
+	const docx = tableCardsDocx([g], { date: '2026-11-02' });
+	assert.equal(String.fromCharCode(docx[0], docx[1]), 'PK');
+	const text = new TextDecoder().decode(docx);
+	for (const part of ['[Content_Types].xml', 'word/document.xml', 'Yellow (Foot fault)', 'FIGHTERS ADVANCING', '2026-11-02']) assert.ok(text.includes(part), part);
+	assert.ok(!text.includes('emblem.png'), 'no logo given, none linked');
 });

@@ -11,9 +11,10 @@ const dataUri = (path, type) => `data:${type};base64,${readFileSync(join(root, p
 
 export function buildSingle() {
 	const state = read('js/state.js').replace(/^export /gm, '');
-	const app = read('js/app.js').replace(/^import \{[\s\S]*?\} from '\.\/state\.js';\n/, '');
+	const cards = read('js/tablecards.js').replace(/^export /gm, '');
+	const app = read('js/app.js').replace(/^import \{[\s\S]*?\} from '\.\/[\w]+\.js';\n/gm, '');
 	const emblem = dataUri('assets/emblem-256.png', 'image/png');
-	const code = `${state}\n${app}`.replaceAll('assets/emblem-256.png', emblem).replaceAll('</script', '<\\/script');
+	const code = `${state}\n${cards}\n${app}`.replaceAll('assets/emblem-256.png', emblem).replaceAll('</script', '<\\/script');
 	const css = read('css/style.css').replace(/url\(\.\.\/assets\/fonts\/([\w-]+\.woff2)\)/g, (_, f) => `url(${dataUri(`assets/fonts/${f}`, 'font/woff2')})`);
 	const icon = dataUri('assets/saber-icon-192.png', 'image/png');
 	return read('index.html')

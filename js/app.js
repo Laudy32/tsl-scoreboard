@@ -2,8 +2,9 @@ import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
 	formatClock, parseClock, fighterLabel, describeEvent, logToCSV, resultsToCSV, resultsToJSON,
 	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
-	CARD_REASONS, CARD_NAMES, hasCards,
+	CARD_REASONS, CARD_NAMES, hasCards, tableCardGroups,
 } from './state.js';
+import { tableCardsDocx } from './tablecards.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
 // A display opened in its own window (?view=display) only shows the score.
@@ -552,6 +553,7 @@ function nameEditor(kind, id, name, normal) {
 function renderPool(s) {
 	const p = s.pool;
 	const g = p.groups.find(x => x.id === p.view);
+	const fought = p.bouts.some(b => b.result);
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
@@ -590,12 +592,13 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
-		${p.bouts.some(b => b.result) ? `<section>
+		${p.groups.length ? `<section>
 			<h3>Results</h3>
-			<p class="muted">One row per bout fought, every group. Open the CSV in Excel or Google Sheets, or use it to enter scores in Challonge.</p>
+			<p class="muted">Table cards are a Word file in the club's layout, one page per group, filled in for bouts fought and blank for the rest. The CSV has a row per bout fought, for Excel, Google Sheets or entering scores in Challonge.</p>
 			<div class="row wrap">
-				<button type="button" class="btn" data-action="results-csv">Download results (CSV)</button>
-				<button type="button" class="btn" data-action="results-json">Download results (JSON)</button>
+				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
+				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
+				<button type="button" class="btn" data-action="results-json" ${fought ? '' : 'disabled'}>Download results (JSON)</button>
 			</div>
 		</section>` : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
@@ -837,6 +840,18 @@ function exportResults(kind) {
 	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
 }
 
+async function exportTableCards() {
+	let logo = null;
+	try {
+		logo = new Uint8Array(await (await fetch('assets/emblem-256.png')).arrayBuffer());
+	} catch {
+		// No emblem (offline before it was cached): the cards still work without it.
+	}
+	const today = new Date().toISOString().slice(0, 10);
+	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo });
+	download(docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `tsl-table-cards-${today}.docx`);
+}
+
 function saveBackup() {
 	const text = JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1);
 	download(text, 'application/json', `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`);
@@ -863,6 +878,7 @@ const actions = {
 	'backup-restore': () => $('#backup-file').click(),
 	'results-csv': () => exportResults('csv'),
 	'results-json': () => exportResults('json'),
+	'results-docx': exportTableCards,
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };

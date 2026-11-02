@@ -45,10 +45,16 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
-- Results download from Matchups: one row per bout fought (group, fighters,
-  scores, the score in Challonge's "10-4" form, winner, how it was won,
-  division, time) as a CSV for Excel, Google Sheets or entering in Challonge,
-  or as JSON for other tools
+- Results download from Matchups:
+  - Table cards as a Word file in the club's table card layout: a page per
+    group, a band per match, points, winner (with how it was won), warnings
+    and a Checked column, standings for a round robin, and lines for the
+    Director, timekeeper, line judges and table judge to sign. Bouts fought
+    are filled in; the rest are blank to fill by hand
+  - One row per bout fought (group, fighters, scores, the score in
+    Challonge's "10-4" form, winner, how it was won, cards, division, time)
+    as a CSV for Excel, Google Sheets or entering in Challonge, or as JSON
+    for other tools
 - Spectator display (Display button or F) that stays in sync with the
   controls, for a second monitor or TV on the same computer
 - Names, subtitles, seven colors, swap sides
