@@ -37,12 +37,19 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   switch-sides call at half the winning score, a 3:00 medical hold and a
   no-show (0–10) from the Penalty sheet
 - Total Bout Time match type, and an attempt clock for sudden deaths over 30s
-- Matchups: make named groups (Pool A, Round 1, a series), enter matchups one by one (single elimination, Swiss, or any order) or add
-  every pairing for a round robin, then fight them in order. The Next match
-  button records the finished bout and loads the next fighters. Standings rank
+- Matchups: make named groups (Pool A, Round 1, a series), enter matchups one by one (single elimination, Swiss, or any order), or
+  enter a pool's fighters and tap Make pool matchups for a round robin (a
+  4-fighter pool follows the club's pool card: 2v3, 4v1, 1v2, 3v4, 4v2, 3v1),
+  then fight them in order. The Next match
+  button records the finished bout and loads the next fighters; after the
+  last bout it becomes Record result. A Championship Series bout is recorded
+  once the match is won, as rounds won. Starting a new match or resetting
+  never clears the matchups or results, and undo stops at the start of each
+  bout (a wrong result is taken back in Matchups). Standings rank
   by wins, then the win between tied fighters, then points for, then fewest against, with a 60 second rest when a
   fighter goes back to back. Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
+- Settings has three tabs (Match, Rules, Data). The control screen names the pool bout on the scoreboard ("Pool A · Match 2 of 6"). On a tablet or laptop (900px and wider) the clock and buttons sit on the left with large scores to tap on the right. The TV display keeps the scores still when the status line or a call appears, leaves a margin for TVs that crop their edges, and shows the event name when one is set
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
 - Roster: import the club roster once (the rankings' `ladder.csv`, any CSV

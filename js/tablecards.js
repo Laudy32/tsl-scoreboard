@@ -45,11 +45,12 @@ function docxLogo(id) {
 const docxBlank = '________________________________';
 
 /** One group's card. */
-function docxGroup(g, { date, logo, index }) {
+function docxGroup(g, { date, logo, index, event }) {
 	const title = [g.division, g.name].filter(Boolean).join(' – ').toUpperCase();
 	const type = g.robin ? `POOL – ${g.fighters.length} FIGHTERS` : `MATCHES – ${g.bouts.length}`;
 	const heading = [
 		docxPara([[title, { bold: true, size: 28 }]]),
+		...(event?.name ? [docxPara([['EVENT: ', { bold: true }], [[event.name, event.tier && `(${event.tier})`].filter(Boolean).join(' ')]], { before: 60 })] : []),
 		docxPara([['DATE: ', { bold: true }], [date]], { before: 60 }),
 		docxPara([['TYPE: ', { bold: true }], [type]], { before: 60 }),
 		docxPara([['START TIME: ', { bold: true }], ['________']], { before: 60 }),
@@ -75,7 +76,10 @@ function docxGroup(g, { date, logo, index }) {
 		const r = b.result;
 		// A no-show match is crossed out: no points, just who didn't show.
 		const crossed = r?.noShow;
-		const label = `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
+		// A pool's band names the round and the fighters' numbers, as on the paper pool card.
+		const label = b.round
+			? `${g.name} / Round ${b.round} / Match ${b.number}: ${b.seeds[0]} ${b.fighters[0]} vs ${b.seeds[1]} ${b.fighters[1]}`
+			: `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
 		const band = [[label, { bold: true, color: 'FFFFFF', strike: crossed }], ...(crossed ? [['   NO-SHOW', { bold: true, color: 'FFFFFF' }]] : [])];
 		rows.push(docxRow([docxCell(DOCX_COLS.reduce((a, c) => a + c, 0), docxPara(band), { fill: DOCX_GOLD, span: 5 })], 360));
 		b.fighters.forEach((f, i) => {
@@ -173,7 +177,7 @@ function docxZip(files) {
  * The table cards for these groups (from tableCardGroups) as .docx bytes.
  * `logo` is the club emblem as PNG bytes, or null to leave it out.
  */
-export function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), logo = null } = {}) {
+export function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), logo = null, event = null } = {}) {
 	const files = {
 		'[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
@@ -181,7 +185,7 @@ export function tableCardsDocx(groups, { date = new Date().toISOString().slice(0
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
 		'word/_rels/document.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${logo ? '<Relationship Id="rLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/emblem.png"/>' : ''}</Relationships>`,
-		'word/document.xml': docxDocument(groups, { date, logo: !!logo }),
+		'word/document.xml': docxDocument(groups, { date, logo: !!logo, event }),
 	};
 	if (logo) files['word/media/emblem.png'] = logo;
 	return docxZip(files);

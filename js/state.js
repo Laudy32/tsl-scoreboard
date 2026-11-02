@@ -274,12 +274,23 @@ export function leader(s) {
 /** The bout is over and has a result a pool can record: time is up, no final exchange pending, and a winner. */
 export function boutDecided(s, now = Date.now()) {
 	if (timeLeft(s, now) !== 0 || s.finalExchange || isUntimed(s)) return false;
+	// A Championship Series bout is decided by the match, not by one round, unless it was forfeited.
+	if (playsRounds(s) && s.forfeit == null) return matchWinner(s) !== null;
 	if (!s.settings.liveScore && !s.tally.published) return false;
 	return leader(s) !== null;
 }
 
+/** A best-of-rounds match (Championship Series), recorded as rounds won. */
+const playsRounds = s => usesRounds(s) && s.settings.playTo > 0;
+
+/** The bout's winner side: the match winner in Championship Series, else whoever leads. */
+export const boutWinner = s => (playsRounds(s) && s.forfeit == null ? matchWinner(s) : leader(s));
+
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
-export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+export const boutScores = s => {
+	if (playsRounds(s) && s.forfeit == null) return s.fighters.map(f => f.wins);
+	return s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores;
+};
 
 /**
  * How a decided bout was won, for the results export: 'points', 'sudden death',
@@ -344,6 +355,20 @@ export function poolStandings(pool, groupId = null) {
 	return table;
 }
 
+/**
+ * The club's pool card orders, by pool size: [a, b] seed numbers from 1, two
+ * bouts a round (2023 Standard table cards). Sizes not listed use roundRobin.
+ */
+export const POOL_CARD_ORDERS = {
+	4: [[2, 3], [4, 1], [1, 2], [3, 4], [4, 2], [3, 1]],
+};
+
+/** A pool's bouts for fighters in seed order: the club's card order for that size, or roundRobin. */
+export function poolOrder(ids) {
+	const card = POOL_CARD_ORDERS[ids.length];
+	return card ? card.map(([a, b]) => [ids[a - 1], ids[b - 1]]) : roundRobin(ids);
+}
+
 /** Every pairing once, ordered so fighters rest between bouts (the circle method). Returns [a, b] id pairs. */
 export function roundRobin(ids) {
 	const list = [...ids];
@@ -406,11 +431,14 @@ export class Store {
 	 * `clock: true` marks actions that change the clock on purpose, so undoing
 	 * them puts the old time back. Undoing anything else leaves the clock alone.
 	 */
-	apply(mutate, { undoable = true, clock = false } = {}) {
+	apply(mutate, { undoable = true, clock = false, freshUndo = false } = {}) {
 		const before = structuredClone(this.state);
 		const result = mutate(this.state);
 		if (result === false) return false;
-		if (undoable) {
+		// Loading or recording a pool bout starts a new undo history, so undo can't
+		// bring back a bout the pool has moved on from.
+		if (freshUndo) this.undoStack = [];
+		else if (undoable) {
 			this.undoStack.push({ state: before, clock });
 			if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
 		}
@@ -911,13 +939,20 @@ export class Store {
 
 	/** Start a new match. Keeps fighter names/colors and settings unless `full`. */
 	newMatch({ full = false } = {}) {
+		const leavesPool = this.state.pool.active !== null && (full || boutDecided(this.state, this.now()));
 		return this.apply(s => {
+			// Matchups and results are never cleared here. A decided pool bout is recorded first.
+			if (leavesPool) {
+				const recorded = boutDecided(s, this.now()) && this.#recordBout(s) !== false;
+				if (!recorded) this.#unloadBout(s);
+			}
 			const fresh = initialState(s.settings);
 			if (!full) {
 				fresh.fighters = s.fighters.map(f => ({ ...f, score: 0, wins: 0 }));
 			}
-			Object.assign(s, fresh);
-		});
+			Object.assign(s, { ...fresh, pool: s.pool });
+			if (leavesPool) for (const f of s.fighters) delete f.poolId;
+		}, { freshUndo: leavesPool });
 	}
 
 	swapSides() {
@@ -1104,7 +1139,7 @@ export class Store {
 			if (!g) return false;
 			const mine = s.pool.bouts.filter(b => b.group === g.id);
 			const have = new Set(mine.map(b => [b.a, b.b].sort().join('-')));
-			const missing = roundRobin(g.fighters).filter(p => !have.has([...p].sort().join('-')));
+			const missing = poolOrder(g.fighters).filter(p => !have.has([...p].sort().join('-')));
 			if (!missing.length) return false;
 			g.robin = true;
 			for (const [a, b] of missing) s.pool.bouts.push({ id: this.#boutId(s), group: g.id, a, b, result: null });
@@ -1120,18 +1155,16 @@ export class Store {
 
 	/** Puts a bout's two fighters on the scoreboard, with a fresh round and the cards they already carry. */
 	loadPoolBout(boutId) {
-		return this.apply(s => this.#loadBout(s, boutId), { undoable: false });
+		return this.apply(s => this.#loadBout(s, boutId), { freshUndo: true });
 	}
 
 	#loadBout(s, boutId) {
 		const bout = s.pool.bouts.find(b => b.id === boutId);
 		if (!bout || bout.result) return false;
-		// Cards given in a bout that is being left unrecorded still count.
 		if (s.pool.active !== null) {
-			for (const f of s.fighters) {
-				const pf = s.pool.fighters.find(x => x.id === f.poolId);
-				if (pf) pf.cards = structuredClone(f.cards);
-			}
+			// A decided bout is recorded before the next one loads, so its result isn't lost.
+			const recorded = s.pool.active !== boutId && boutDecided(s, this.now()) && this.#recordBout(s) !== false;
+			if (!recorded) this.#unloadBout(s);
 		}
 		const fresh = initialState(s.settings);
 		Object.assign(s, { ...fresh, pool: s.pool });
@@ -1142,9 +1175,18 @@ export class Store {
 		s.pool.active = boutId;
 	}
 
+	/** Leaves the loaded bout unrecorded. Cards given in it still count. */
+	#unloadBout(s) {
+		for (const f of s.fighters) {
+			const pf = s.pool.fighters.find(x => x.id === f.poolId);
+			if (pf) pf.cards = structuredClone(f.cards);
+		}
+		s.pool.active = null;
+	}
+
 	/** Records the loaded bout's result once it is decided, and carries the cards back to the pool. */
 	recordPoolBout() {
-		return this.apply(s => this.#recordBout(s), { undoable: false });
+		return this.apply(s => this.#recordBout(s), { freshUndo: true });
 	}
 
 	#recordBout(s) {
@@ -1153,7 +1195,8 @@ export class Store {
 		const ids = s.fighters.map(f => f.poolId);
 		if (!ids.includes(bout.a) || !ids.includes(bout.b)) return false;
 		const scores = boutScores(s);
-		const w = leader(s);
+		const w = boutWinner(s);
+		const order = [ids.indexOf(bout.a), ids.indexOf(bout.b)];
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
@@ -1164,6 +1207,13 @@ export class Store {
 			cards: [bout.a, bout.b].map(id => s.log
 				.filter(e => e.kind === 'card' && !e.voided && ids[e.side] === id)
 				.map(e => ({ card: e.effective, reason: e.reason ?? '' }))),
+			// How each fighter's cards changed in this bout, so taking the result back can undo it.
+			cardChange: order.map(i => {
+				const pf = s.pool.fighters.find(x => x.id === ids[i]);
+				return Object.fromEntries(Object.keys(noCards()).map(c => [c, s.fighters[i].cards[c] - (pf?.cards[c] ?? 0)]));
+			}),
+			// Championship Series: each round's points, for [a, b].
+			...(s.rounds.length && playsRounds(s) ? { rounds: s.rounds.map(r => order.map(i => r.scores[i])) } : {}),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1183,7 +1233,8 @@ export class Store {
 			if (next) break;
 		}
 		if (!next) return null;
-		if (s.pool.active !== null ? !boutDecided(s, this.now()) : hasStarted(s)) return null;
+		// With no pool bout loaded, the scoreboard must be fresh or showing a finished bout.
+		if (s.pool.active !== null ? !boutDecided(s, this.now()) : hasStarted(s) && !boutDecided(s, this.now())) return null;
 		return next;
 	}
 
@@ -1194,7 +1245,7 @@ export class Store {
 		return this.apply(s => {
 			if (s.pool.active !== null && this.#recordBout(s) === false) return false;
 			return this.#loadBout(s, next.id);
-		}, { undoable: false });
+		}, { freshUndo: true });
 	}
 
 	/** The event the results belong to, for the rankings export: { name, tier }. */
@@ -1211,6 +1262,15 @@ export class Store {
 		return this.apply(s => {
 			const bout = s.pool.bouts.find(b => b.id === boutId);
 			if (!bout?.result) return false;
+			// The cards that bout gave come off the fighters again (a bout fought again gives its own).
+			[bout.a, bout.b].forEach((id, i) => {
+				const change = bout.result.cardChange?.[i];
+				if (!change) return;
+				const holders = [s.pool.fighters.find(f => f.id === id), ...s.fighters.filter(f => f.poolId === id)];
+				for (const h of holders.filter(Boolean)) {
+					for (const c in change) h.cards[c] = Math.max(0, (h.cards[c] ?? 0) - change[c]);
+				}
+			});
 			bout.result = null;
 		}, { undoable: false });
 	}
@@ -1438,6 +1498,9 @@ export function tableCardGroups(pool) {
 			charters: g.fighters.map(charter),
 			bouts: bouts.map((b, i) => ({
 				number: i + 1,
+				// A round robin plays half the fighters' worth of bouts a round, as in the export.
+				round: g.robin ? Math.floor(i / Math.max(1, Math.floor(g.fighters.length / 2))) + 1 : null,
+				seeds: [b.a, b.b].map(id => g.fighters.indexOf(id) + 1),
 				fighters: [name(b.a), name(b.b)],
 				charters: [charter(b.a), charter(b.b)],
 				result: b.result && {
@@ -1493,6 +1556,7 @@ export function resultRows(pool) {
 			const cards = [cardsText(b.result.cards?.[0]), cardsText(b.result.cards?.[1])];
 			const notes = [
 				scratch ? `${name(winner === b.a ? b.b : b.a)} did not show` : (DECISION_NAMES[decision] && decision !== 'points' ? DECISION_NAMES[decision] : ''),
+				b.result.rounds?.length ? `Rounds ${b.result.rounds.map(r => r.join('-')).join(', ')}` : '',
 				cards[0] && `${name(b.a)}: ${cards[0]}`,
 				cards[1] && `${name(b.b)}: ${cards[1]}`,
 			].filter(Boolean).join('; ');
