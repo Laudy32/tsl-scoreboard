@@ -11,8 +11,8 @@ const DOCX_COLS = [2700, 1800, 2900, 2500, 900];
 
 const docxEsc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-function docxRun(text, { bold = false, size = 20, color = null } = {}) {
-	const props = `<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${bold ? '<w:b/>' : ''}${color ? `<w:color w:val="${color}"/>` : ''}<w:sz w:val="${size}"/>`;
+function docxRun(text, { bold = false, size = 20, color = null, strike = false } = {}) {
+	const props = `<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${bold ? '<w:b/>' : ''}${strike ? '<w:strike/>' : ''}${color ? `<w:color w:val="${color}"/>` : ''}<w:sz w:val="${size}"/>`;
 	return `<w:r><w:rPr>${props}</w:rPr><w:t xml:space="preserve">${docxEsc(text)}</w:t></w:r>`;
 }
 
@@ -72,15 +72,19 @@ function docxGroup(g, { date, logo, index }) {
 	], 600);
 	const rows = [header];
 	for (const b of g.bouts) {
+		const r = b.result;
+		// A no-show match is crossed out: no points, just who didn't show.
+		const crossed = r?.noShow;
 		const label = `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
-		rows.push(docxRow([docxCell(DOCX_COLS.reduce((a, c) => a + c, 0), docxPara([[label, { bold: true, color: 'FFFFFF' }]]), { fill: DOCX_GOLD, span: 5 })], 360));
+		const band = [[label, { bold: true, color: 'FFFFFF', strike: crossed }], ...(crossed ? [['   NO-SHOW', { bold: true, color: 'FFFFFF' }]] : [])];
+		rows.push(docxRow([docxCell(DOCX_COLS.reduce((a, c) => a + c, 0), docxPara(band), { fill: DOCX_GOLD, span: 5 })], 360));
 		b.fighters.forEach((f, i) => {
-			const r = b.result;
 			const won = r && r.winner === i;
-			const winner = won ? [docxPara([[`✓ ${f}`, { bold: true }]]), r.decision ? docxPara([[r.decision, small]]) : ''] : '';
+			let winner = won ? [docxPara([[`✓ ${f}`, { bold: true }]]), r.decision ? docxPara([[r.decision, small]]) : ''] : '';
+			if (crossed) winner = won ? '' : docxPara([['No-show', { bold: true, color: 'C00000' }]]);
 			rows.push(docxRow([
-				docxCell(cName, [docxPara([['Fighter name:', { size: 12 }]]), docxPara([[f, { bold: true }]])]),
-				docxCell(cPts, docxPara([[r ? String(r.scores[i]) : '', { bold: true, size: 24 }]], { align: 'center' }), { fill: DOCX_SHADE }),
+				docxCell(cName, [docxPara([['Fighter name:', { size: 12 }]]), docxPara([[f, { bold: true, strike: crossed }]])]),
+				docxCell(cPts, docxPara([[r && !crossed ? String(r.scores[i]) : '', { bold: true, size: 24 }]], { align: 'center' }), { fill: DOCX_SHADE }),
 				docxCell(cWin, winner),
 				docxCell(cWarn, docxPara([[r ? r.cards[i] : '', { size: 18 }]])),
 				docxCell(cChk, ''),

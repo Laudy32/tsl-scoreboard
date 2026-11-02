@@ -1369,6 +1369,7 @@ export function tableCardGroups(pool) {
 				number: i + 1,
 				fighters: [name(b.a), name(b.b)],
 				result: b.result && {
+					noShow: b.result.decision === 'no-show',
 					scores: b.result.scores,
 					winner: b.result.winner === null ? null : b.result.winner === b.a ? 0 : 1,
 					decision: DECISION_NAMES[b.result.decision] ?? '',
@@ -1394,7 +1395,9 @@ export function resultRows(pool) {
 			if (b.group !== g.id) continue;
 			n++;
 			if (!b.result) continue;
-			const { scores, winner } = b.result;
+			const { winner } = b.result;
+			// A no-show is recorded as the rules' 0–10 for the standings, but exported with no score.
+			const scores = b.result.decision === 'no-show' ? ['', ''] : b.result.scores;
 			rows.push({
 				group: g.name,
 				bout: n,
@@ -1420,7 +1423,7 @@ const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
 /** The results as a CSV that opens in Excel or Google Sheets; Score is in Challonge's "A-B" form. */
 export function resultsToCSV(pool) {
 	const head = ['Group', 'Bout', 'Fighter A', 'Fighter B', 'Score A', 'Score B', 'Score', 'Winner', 'Loser', 'Decision', 'Cards A', 'Cards B', 'Division', 'Recorded at'];
-	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, `${r.scoreA}-${r.scoreB}`,
+	const rows = resultRows(pool).map(r => [r.group, r.bout, r.fighterA, r.fighterB, r.scoreA, r.scoreB, r.scoreA === '' ? '' : `${r.scoreA}-${r.scoreB}`,
 		r.winner, r.loser, r.decision, r.cardsA, r.cardsB, r.division, r.recordedAt]);
 	return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
 }

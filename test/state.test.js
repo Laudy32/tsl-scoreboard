@@ -1312,7 +1312,15 @@ test('results export: Unity decisions, no-shows, and results saved before the ex
 	n.store.loadPoolBout(1);
 	n.store.noShow(1);
 	n.store.recordPoolBout();
-	assert.equal(resultRows(n.s().pool)[0].decision, 'no-show');
+	const ns = resultRows(n.s().pool)[0];
+	assert.equal(ns.decision, 'no-show');
+	assert.deepEqual([ns.scoreA, ns.scoreB], ['', ''], 'a no-show is crossed out, not exported as 10-0');
+	assert.match(resultsToCSV(n.s().pool).split('\n')[1], /"","","","Ana"/);
+	const card = tableCardGroups(n.s().pool)[0].bouts[0].result;
+	assert.equal(card.noShow, true);
+	const xml = new TextDecoder().decode(tableCardsDocx(tableCardGroups(n.s().pool)));
+	assert.ok(xml.includes('<w:strike/>') && xml.includes('NO-SHOW'), 'the card crosses the match out');
+	assert.ok(!xml.includes('<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">10<'), 'with no 10 in the points column');
 
 	const old = n.s().pool;
 	delete old.bouts[0].result.decision;
@@ -1340,7 +1348,7 @@ test('table cards: every matchup in order, filled in once fought, and a Word fil
 	assert.deepEqual(g.bouts[0], {
 		number: 1,
 		fighters: [name(b1.a), name(b1.b)],
-		result: { scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
+		result: { noShow: false, scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
 	}, 'a card taken back is left off');
 	assert.equal(g.bouts[1].result, null);
 	assert.equal(g.standings[0].name, name(b1.a));
