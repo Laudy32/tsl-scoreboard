@@ -7,6 +7,7 @@ const FILES = [
 	'css/style.css',
 	'js/app.js',
 	'js/state.js',
+	'js/tablecards.js',
 	'manifest.webmanifest',
 	'assets/emblem-256.png',
 	'assets/fonts/big-shoulders.woff2',

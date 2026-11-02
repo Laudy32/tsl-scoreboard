@@ -15,3 +15,9 @@ test('the single file needs no other files', () => {
 	assert.doesNotMatch(committed, /^import /m);
 	assert.doesNotMatch(committed, /^export /m);
 });
+
+test('a shared copy can carry a roster; the committed one carries none', () => {
+	assert.match(committed, /const BUNDLED_ROSTER = \[\];/);
+	const shared = buildSingle({ roster: [{ name: 'Ana Reyes', charter: 'Tennessee' }] });
+	assert.match(shared, /const BUNDLED_ROSTER = \[\{"name":"Ana Reyes","charter":"Tennessee"\}\];/);
+});

@@ -649,11 +649,17 @@ body[data-view=display] {
 .pool-actions { display: flex; gap: 6px; }
 .inline.matchup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 10px; }
 .sheet-body .row + .row, .inline.matchup + .row { margin-top: 10px; }
+.sheet-body section + .row { margin-top: 16px; }
+.event-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-bottom: 10px; }
+.event-fields input { width: 100%; }
 .inline.matchup + .pool-bouts { margin-top: 10px; }
 
 .group-title { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .group-title h3 { margin: 0; }
 .inline.rename input { flex: 1; min-width: 0; }
+.inline.rename.with-charter { flex-wrap: wrap; width: 100%; }
+.inline.rename.with-charter #pool-rename { flex-basis: 100%; }
+.chip-charter { color: var(--muted); font-size: 0.85em; }
 .tied { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--gold); color: #16120a; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; vertical-align: 2px; }
 button.chip-label { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 </style>
@@ -810,7 +816,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null };
+	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null, event: { name: '', tier: '' } };
 }
 
 function initialState(settings = DEFAULT_SETTINGS) {
@@ -872,6 +878,7 @@ function normalize(saved) {
 /** A pool saved before groups existed gets one group holding its fighters and bouts. */
 function normalizePool(saved) {
 	const pool = { ...emptyPool(), ...saved };
+	pool.event = { ...emptyPool().event, ...saved?.event };
 	pool.groups = (pool.groups ?? []).map(g => ({ ...g, fighters: [...(g.fighters ?? [])] }));
 	if (pool.bouts.some(b => b.group == null)) {
 		let g = pool.groups[0];
@@ -939,6 +946,20 @@ function boutDecided(s, now = Date.now()) {
 
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
 const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/**
+ * How a decided bout was won, for the results export: 'points', 'sudden death',
+ * the judges' 'unanimous' or 'split' decision, 'marshal' (the Marshal picked the
+ * winner of a judges' draw), 'forfeit' (black card) or 'no-show'.
+ */
+function boutDecision(s) {
+	if (s.forfeit !== null && s.forfeit !== undefined) return s.noShow ? 'no-show' : 'forfeit';
+	if (s.tally?.published) {
+		const d = decisionOf(s.tally.votes);
+		return d === 'draw' ? 'marshal' : d;
+	}
+	return s.suddenDeath ? 'sudden death' : 'points';
+}
 
 /** A fighter who fights back to back gets this long to rest. */
 const REST_TIME = 60_000;
@@ -1022,6 +1043,13 @@ class Store {
 		this.undoStack = [];
 		this.now = now;
 		this.listeners = new Set();
+		/** The club roster by lowercase name: { name, charter }. Kept outside the state so undo snapshots stay small. */
+		this.roster = new Map();
+	}
+
+	/** Sets the club roster that new pool fighters take their spelling and charter from. */
+	setRoster(list) {
+		this.roster = new Map((list ?? []).map(r => [r.name.toLowerCase(), r]));
 	}
 
 	subscribe(fn) {
@@ -1586,11 +1614,13 @@ class Store {
 
 	/** The pool fighter with this name (any capitalisation), added if new. Returns its id, or null for a blank name. */
 	#poolFighter(s, name) {
-		const clean = String(name).trim().slice(0, 40);
+		const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 		if (!clean) return null;
 		const found = s.pool.fighters.find(f => f.name.toLowerCase() === clean.toLowerCase());
 		if (found) return found.id;
-		s.pool.fighters.push({ id: s.pool.nextId, name: clean, cards: noCards() });
+		// A fighter on the roster gets the roster's spelling and charter.
+		const listed = this.roster.get(clean.toLowerCase());
+		s.pool.fighters.push({ id: s.pool.nextId, name: listed?.name ?? clean, ...(listed?.charter ? { charter: listed.charter } : {}), cards: noCards() });
 		return s.pool.nextId++;
 	}
 
@@ -1714,14 +1744,22 @@ class Store {
 		}, { undoable: false });
 	}
 
-	/** Fixes a fighter's name everywhere: the pool, and the scoreboard if they are on it. */
-	renamePoolFighter(id, name) {
+	/**
+	 * Fixes a fighter's name, and their charter when given, everywhere: the pool,
+	 * and the scoreboard if they are on it (the charter shows under the name).
+	 */
+	renamePoolFighter(id, name, charter) {
 		return this.apply(s => {
 			const f = s.pool.fighters.find(x => x.id === id);
-			const clean = String(name).trim().slice(0, 40);
+			const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 			if (!f || !clean || s.pool.fighters.some(x => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
 			f.name = clean;
-			for (const sf of s.fighters) if (sf.poolId === id) sf.name = clean;
+			if (charter !== undefined) f.charter = String(charter).trim().replace(/\s+/g, ' ').slice(0, 40);
+			for (const sf of s.fighters) {
+				if (sf.poolId !== id) continue;
+				sf.name = clean;
+				if (charter !== undefined) sf.subtitle = f.charter;
+			}
 		}, { undoable: false });
 	}
 
@@ -1765,7 +1803,7 @@ class Store {
 		Object.assign(s, { ...fresh, pool: s.pool });
 		[bout.a, bout.b].forEach((id, i) => {
 			const pf = s.pool.fighters.find(f => f.id === id);
-			Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+			Object.assign(s.fighters[i], { name: pf.name, subtitle: pf.charter ?? '', poolId: id, cards: structuredClone(pf.cards) });
 		});
 		s.pool.active = boutId;
 	}
@@ -1785,6 +1823,13 @@ class Store {
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
+			decision: boutDecision(s),
+			division: s.settings.division,
+			at: this.now(),
+			// Cards given in this bout (not taken back), for [a, b].
+			cards: [bout.a, bout.b].map(id => s.log
+				.filter(e => e.kind === 'card' && !e.voided && ids[e.side] === id)
+				.map(e => ({ card: e.effective, reason: e.reason ?? '' }))),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1815,6 +1860,15 @@ class Store {
 		return this.apply(s => {
 			if (s.pool.active !== null && this.#recordBout(s) === false) return false;
 			return this.#loadBout(s, next.id);
+		}, { undoable: false });
+	}
+
+	/** The event the results belong to, for the rankings export: { name, tier }. */
+	setPoolEvent(changes) {
+		return this.apply(s => {
+			for (const key of ['name', 'tier']) {
+				if (key in changes) s.pool.event[key] = String(changes[key] ?? '').trim().slice(0, 60);
+			}
 		}, { undoable: false });
 	}
 
@@ -1980,8 +2034,195 @@ function describeEvent(s, e) {
 	}
 }
 
+/** Splits one CSV line into cells, allowing quoted cells with commas and "" for a quote. */
+function csvCells(line) {
+	const cells = [];
+	let cell = '';
+	let quoted = false;
+	for (let i = 0; i < line.length; i++) {
+		const c = line[i];
+		if (quoted) {
+			if (c === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+			else if (c === '"') quoted = false;
+			else cell += c;
+		} else if (c === '"') quoted = true;
+		else if (c === ',') { cells.push(cell); cell = ''; }
+		else cell += c;
+	}
+	cells.push(cell);
+	return cells.map(v => v.trim());
+}
+
+/**
+ * Reads a roster file: a CSV with a name column (name, fighter or player) and,
+ * optionally, a charter column (charter or group, as in the rankings' ladder.csv),
+ * or just one name per line. Returns [{ name, charter }], one per name, sorted by name.
+ */
+function parseRoster(text) {
+	const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+	if (!lines.length) return [];
+	const head = csvCells(lines[0]).map(h => h.toLowerCase());
+	let nameCol = head.findIndex(h => ['name', 'fighter', 'player'].includes(h));
+	const charterCol = head.findIndex(h => ['charter', 'group'].includes(h));
+	const body = nameCol >= 0 ? lines.slice(1) : lines;
+	if (nameCol < 0) nameCol = 0;
+	const byName = new Map();
+	for (const line of body) {
+		const cells = csvCells(line);
+		const name = (cells[nameCol] ?? '').replace(/\s+/g, ' ').slice(0, 40);
+		if (!name || byName.has(name.toLowerCase())) continue;
+		byName.set(name.toLowerCase(), { name, charter: charterCol >= 0 ? cells[charterCol] ?? '' : '' });
+	}
+	return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Cards from a recorded bout as text, e.g. "Yellow (Foot fault), Red". */
+function cardsText(cards = []) {
+	return cards.map(c => `${CARD_NAMES[c.card] ?? c.card}${c.reason ? ` (${c.reason})` : ''}`).join(', ');
+}
+
+/** Readable names for how a bout was won, as written on the table cards. */
+const DECISION_NAMES = {
+	points: 'Points', 'sudden death': 'Sudden death', unanimous: 'Unanimous decision', split: 'Split decision',
+	marshal: "Marshal's decision", forfeit: 'Forfeit', 'no-show': 'No-show',
+};
+
+/**
+ * What the table cards show, one entry per group: its fighters, every matchup
+ * in fighting order (with the result once recorded) and, for a round robin, the standings.
+ */
+function tableCardGroups(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
+	return pool.groups.map(g => {
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		return {
+			name: g.name,
+			robin: !!g.robin,
+			division: bouts.find(b => b.result?.division)?.result.division ?? '',
+			fighters: g.fighters.map(name),
+			charters: g.fighters.map(charter),
+			bouts: bouts.map((b, i) => ({
+				number: i + 1,
+				fighters: [name(b.a), name(b.b)],
+				charters: [charter(b.a), charter(b.b)],
+				result: b.result && {
+					noShow: b.result.decision === 'no-show',
+					scores: b.result.scores,
+					winner: b.result.winner === null ? null : b.result.winner === b.a ? 0 : 1,
+					decision: DECISION_NAMES[b.result.decision] ?? '',
+					cards: [0, 1].map(i => cardsText(b.result.cards?.[i])),
+				},
+			})),
+			standings: g.robin ? poolStandings(pool, g.id) : null,
+		};
+	});
+}
+
+/** A bracket bout's label for the rankings, from its group's name: semifinal, third_place, final or ''. */
+function boutLabel(groupName) {
+	const n = groupName.toLowerCase();
+	if (/bronze|3rd|third/.test(n)) return 'third_place';
+	if (/semi/.test(n)) return 'semifinal';
+	if (/final|gold/.test(n)) return 'final';
+	return '';
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+
+/** The pool letter for the rankings: "Pool A" gives "A"; any other name is kept as it is. */
+const poolLetter = name => name.match(/^pool\s+(\S+)$/i)?.[1] ?? name;
+
+/**
+ * Every recorded bout, in play order, in the format the rankings importer reads
+ * (the Ranking Update handoff, section 3). Round robin groups are pools and the
+ * rest are bracket rounds in the order they were made. A no-show is a scratch
+ * with no score, so it isn't rated as a loss; a black card is a forfeit.
+ * Results saved before a field existed leave it ''.
+ */
+function resultRows(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
+	const event = pool.event ?? { name: '', tier: '' };
+	const rows = [];
+	let bracketRound = 0;
+	for (const g of pool.groups) {
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		if (!g.robin && bouts.length) bracketRound++;
+		// A round robin plays everyone once per round: half the fighters' worth of bouts.
+		const perRound = Math.max(1, Math.floor(g.fighters.length / 2));
+		bouts.forEach((b, i) => {
+			if (!b.result) return;
+			const { winner, decision = '' } = b.result;
+			const at = b.result.at ? new Date(b.result.at) : null;
+			const scratch = decision === 'no-show';
+			const cards = [cardsText(b.result.cards?.[0]), cardsText(b.result.cards?.[1])];
+			const notes = [
+				scratch ? `${name(winner === b.a ? b.b : b.a)} did not show` : (DECISION_NAMES[decision] && decision !== 'points' ? DECISION_NAMES[decision] : ''),
+				cards[0] && `${name(b.a)}: ${cards[0]}`,
+				cards[1] && `${name(b.b)}: ${cards[1]}`,
+			].filter(Boolean).join('; ');
+			rows.push({
+				event_name: event.name,
+				event_tier: event.tier,
+				division: (b.result.division ?? '').toLowerCase(),
+				bout_id: `B${b.id}`,
+				date: at ? `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}` : '',
+				time: at ? `${pad2(at.getHours())}:${pad2(at.getMinutes())}` : '',
+				stage: g.robin ? 'pool' : 'bracket',
+				pool: g.robin ? poolLetter(g.name) : '',
+				round: g.robin ? Math.floor(i / perRound) + 1 : bracketRound,
+				play_order: g.robin ? (i % perRound) + 1 : i + 1,
+				bout_label: g.robin ? '' : boutLabel(g.name),
+				fighter_a: name(b.a),
+				fighter_b: name(b.b),
+				charter_a: charter(b.a),
+				charter_b: charter(b.b),
+				score_a: scratch ? '' : b.result.scores[0],
+				score_b: scratch ? '' : b.result.scores[1],
+				winner: winner === null ? 'draw' : winner === b.a ? 'A' : 'B',
+				result_type: scratch ? 'scratch' : decision === 'forfeit' ? 'forfeit' : 'normal',
+				notes,
+				group: g.name,
+			});
+		});
+	}
+	return rows;
+}
+
+const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
+
+/** Columns of the results CSV, as the rankings importer expects them. */
+const RESULT_COLUMNS = ['event_name', 'event_tier', 'division', 'bout_id', 'date', 'time', 'stage', 'pool', 'round', 'play_order', 'bout_label',
+	'fighter_a', 'fighter_b', 'charter_a', 'charter_b', 'score_a', 'score_b', 'winner', 'result_type', 'notes'];
+
+/** The results as a CSV in the rankings format; it opens in Excel or Google Sheets too. */
+function resultsToCSV(pool) {
+	return [RESULT_COLUMNS, ...resultRows(pool).map(r => RESULT_COLUMNS.map(c => r[c]))].map(r => r.map(csvCell).join(',')).join('\n');
+}
+
+/**
+ * The results as JSON for other tools (a Challonge upload, the rankings): the
+ * same rows as the CSV, plus each fighter's cards and the matchups not fought yet.
+ */
+function resultsToJSON(pool, exportedAt = Date.now()) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	return {
+		format: 'tsl-results',
+		version: 1,
+		exportedAt: new Date(exportedAt).toISOString(),
+		event: { ...pool.event },
+		groups: pool.groups.map(g => ({
+			name: g.name,
+			fighters: g.fighters.map(name),
+			unfought: pool.bouts.filter(b => b.group === g.id && !b.result && b.id !== pool.active).map(b => [name(b.a), name(b.b)]),
+		})),
+		fighters: pool.fighters.map(f => ({ name: f.name, charter: f.charter ?? '', cards: { ...f.cards } })),
+		bouts: resultRows(pool),
+	};
+}
+
 function logToCSV(s) {
-	const esc = v => `"${String(v).replace(/"/g, '""')}"`;
 	const rows = [['time', 'round', 'clock', 'event', s.fighters[0].name, s.fighters[1].name, 'simuls']];
 	for (const e of s.log) {
 		rows.push([
@@ -1994,7 +2235,196 @@ function logToCSV(s) {
 			e.simul,
 		]);
 	}
-	return rows.map(r => r.map(esc).join(',')).join('\n');
+	return rows.map(r => r.map(csvCell).join(',')).join('\n');
+}
+
+// Table cards as a Word document (.docx), laid out like the club's paper
+// cards: one page per group with a band per match, each fighter's points, the
+// winner, warnings and a Checked column, then lines for the officials to sign.
+// Bouts already fought are filled in; the rest are left blank to fill by hand.
+// A .docx is a zip of XML files; it is stored uncompressed, so no library is needed.
+
+const DOCX_GOLD = 'BF8F00';
+const DOCX_SHADE = 'E7E6E6';
+// Column widths in twentieths of a point, across a letter page with half-inch margins.
+const DOCX_COLS = [2700, 1800, 2900, 2500, 900];
+
+const docxEsc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function docxRun(text, { bold = false, size = 20, color = null, strike = false } = {}) {
+	const props = `<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${bold ? '<w:b/>' : ''}${strike ? '<w:strike/>' : ''}${color ? `<w:color w:val="${color}"/>` : ''}<w:sz w:val="${size}"/>`;
+	return `<w:r><w:rPr>${props}</w:rPr><w:t xml:space="preserve">${docxEsc(text)}</w:t></w:r>`;
+}
+
+/** A paragraph of runs; each run is [text, options]. */
+function docxPara(runs, { align = null, before = 0, after = 0, newPage = false } = {}) {
+	const list = typeof runs === 'string' ? [[runs]] : runs;
+	const pPr = `<w:pPr>${newPage ? '<w:pageBreakBefore/>' : ''}<w:spacing w:before="${before}" w:after="${after}"/>${align ? `<w:jc w:val="${align}"/>` : ''}</w:pPr>`;
+	return `<w:p>${pPr}${list.map(([t, o]) => docxRun(t, o)).join('')}</w:p>`;
+}
+
+function docxCell(width, content, { fill = null, span = 1 } = {}) {
+	const paras = Array.isArray(content) ? content.join('') : content || docxPara('');
+	return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ''}${fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : ''}<w:vAlign w:val="center"/></w:tcPr>${paras}</w:tc>`;
+}
+
+const docxRow = (cells, height = 400) => `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${height}"/></w:trPr>${cells.join('')}</w:tr>`;
+
+function docxTable(rows, cols, { borders = true } = {}) {
+	const line = borders ? 'w:val="single" w:sz="4" w:space="0" w:color="A6A6A6"' : 'w:val="nil"';
+	const edges = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(e => `<w:${e} ${line}/>`).join('');
+	return `<w:tbl><w:tblPr><w:tblW w:w="${cols.reduce((a, b) => a + b, 0)}" w:type="dxa"/><w:tblBorders>${edges}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${cols.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`;
+}
+
+function docxLogo(id) {
+	// 0.9 inch square, in EMUs.
+	const size = 822960;
+	return `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${size}" cy="${size}"/><wp:docPr id="${id}" name="The Saber Legion"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="emblem.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${size}" cy="${size}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
+const docxBlank = '________________________________';
+
+/** One group's card. */
+function docxGroup(g, { date, logo, index }) {
+	const title = [g.division, g.name].filter(Boolean).join(' – ').toUpperCase();
+	const type = g.robin ? `POOL – ${g.fighters.length} FIGHTERS` : `MATCHES – ${g.bouts.length}`;
+	const heading = [
+		docxPara([[title, { bold: true, size: 28 }]]),
+		docxPara([['DATE: ', { bold: true }], [date]], { before: 60 }),
+		docxPara([['TYPE: ', { bold: true }], [type]], { before: 60 }),
+		docxPara([['START TIME: ', { bold: true }], ['________']], { before: 60 }),
+	];
+	const headCols = [1500, 9300];
+	const head = docxTable([docxRow([docxCell(headCols[0], logo ? docxLogo(index + 1) : ''), docxCell(headCols[1], heading)], 1300)], headCols, { borders: false });
+
+	const fighters = g.fighters.length
+		? docxPara([['FIGHTERS   ', { bold: true }], ...g.fighters.flatMap((f, i) => [[`${i + 1} `, { bold: true, color: DOCX_GOLD }], [`${f}${i < g.fighters.length - 1 ? '     ' : ''}`]])], { before: 120, after: 120 })
+		: '';
+
+	const [cName, cPts, cWin, cWarn, cChk] = DOCX_COLS;
+	const small = { size: 14 };
+	const header = docxRow([
+		docxCell(cName, docxPara([['NAME', { bold: true, size: 18 }]])),
+		docxCell(cPts, [docxPara([['POINTS SCORED', { bold: true, size: 18 }]]), docxPara([['FOR EACH FIGHTER', small]])]),
+		docxCell(cWin, [docxPara([['WINNER OF THE MATCH:', { bold: true, size: 18 }]]), docxPara([['PLEASE CHECK MARK OR WRITE OUT NAME', small]])]),
+		docxCell(cWarn, [docxPara([['WARNINGS', { bold: true, size: 18 }]]), docxPara([['Record all warnings / yellow card / red card', { size: 14, color: 'C00000' }]])]),
+		docxCell(cChk, docxPara([['CHECKED', { bold: true, size: 14 }]], { align: 'center' })),
+	], 600);
+	const rows = [header];
+	for (const b of g.bouts) {
+		const r = b.result;
+		// A no-show match is crossed out: no points, just who didn't show.
+		const crossed = r?.noShow;
+		const label = `${g.name} / Match ${b.number}: ${b.fighters[0]} vs ${b.fighters[1]}`;
+		const band = [[label, { bold: true, color: 'FFFFFF', strike: crossed }], ...(crossed ? [['   NO-SHOW', { bold: true, color: 'FFFFFF' }]] : [])];
+		rows.push(docxRow([docxCell(DOCX_COLS.reduce((a, c) => a + c, 0), docxPara(band), { fill: DOCX_GOLD, span: 5 })], 360));
+		b.fighters.forEach((f, i) => {
+			const won = r && r.winner === i;
+			let winner = won ? [docxPara([[`✓ ${f}`, { bold: true }]]), r.decision ? docxPara([[r.decision, small]]) : ''] : '';
+			if (crossed) winner = won ? '' : docxPara([['No-show', { bold: true, color: 'C00000' }]]);
+			rows.push(docxRow([
+				docxCell(cName, [docxPara([['Fighter name:', { size: 12 }]]), docxPara([[f, { bold: true, strike: crossed }], ...(b.charters?.[i] ? [[`  ${b.charters[i]}`, { size: 14 }]] : [])])]),
+				docxCell(cPts, docxPara([[r && !crossed ? String(r.scores[i]) : '', { bold: true, size: 24 }]], { align: 'center' }), { fill: DOCX_SHADE }),
+				docxCell(cWin, winner),
+				docxCell(cWarn, docxPara([[r ? r.cards[i] : '', { size: 18 }]])),
+				docxCell(cChk, ''),
+			], 440));
+		});
+	}
+	const body = [index > 0 ? docxPara('', { newPage: true }) : '', head, fighters, docxTable(rows, DOCX_COLS)];
+
+	if (g.standings?.some(s => s.played)) {
+		const cols = [900, 4500, 1100, 1100, 1100, 1100];
+		const cell = (w, t, bold = false) => docxCell(w, docxPara([[String(t), { bold, size: 18 }]]));
+		const table = [docxRow(['PLACE', 'FIGHTER', 'WINS', 'LOSSES', 'POINTS FOR', 'AGAINST'].map((t, i) => cell(cols[i], t, true)), 320)];
+		g.standings.forEach((s, i) => table.push(docxRow([cell(cols[0], `${i + 1}${s.tied ? ' (tie)' : ''}`), cell(cols[1], s.name, true), cell(cols[2], s.wins), cell(cols[3], s.losses), cell(cols[4], s.pointsFor), cell(cols[5], s.pointsAgainst)], 320)));
+		body.push(docxPara([['STANDINGS', { bold: true }]], { before: 200, after: 80 }), docxTable(table, cols));
+	}
+
+	const sign = label => docxPara([[`${label} `, { bold: true }], [docxBlank]], { before: 200 });
+	body.push(
+		...(g.robin ? [sign('FIGHTERS ADVANCING:')] : []),
+		sign('DIRECTOR:'),
+		sign('TIMEKEEPER SIGNATURE:'),
+		docxPara([['LINE JUDGES: ', { bold: true }], [`${docxBlank}   ${docxBlank}`]], { before: 200 }),
+		sign('TABLE JUDGE SIGNATURE:'),
+	);
+	return body.join('');
+}
+
+function docxDocument(groups, opts) {
+	const body = groups.length
+		? groups.map((g, i) => docxGroup(g, { ...opts, index: i })).join('')
+		: docxPara('No matchups yet.');
+	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="360" w:footer="360" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+}
+
+const DOCX_CRC = (() => {
+	const t = new Uint32Array(256);
+	for (let n = 0; n < 256; n++) {
+		let c = n;
+		for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+		t[n] = c >>> 0;
+	}
+	return t;
+})();
+
+function docxCrc32(bytes) {
+	let c = 0xFFFFFFFF;
+	for (const b of bytes) c = DOCX_CRC[(c ^ b) & 0xFF] ^ (c >>> 8);
+	return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/** A zip of { path: string | Uint8Array }, stored without compression. */
+function docxZip(files) {
+	const enc = new TextEncoder();
+	const parts = [];
+	const central = [];
+	let offset = 0;
+	for (const [path, content] of Object.entries(files)) {
+		const name = enc.encode(path);
+		const data = typeof content === 'string' ? enc.encode(content) : content;
+		const crc = docxCrc32(data);
+		const local = new DataView(new ArrayBuffer(30));
+		// Signature, version 2.0, UTF-8 names, stored, a fixed 1 Jan 2020 timestamp.
+		[[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, 0, 2], [12, 0x5021, 2], [14, crc, 4], [18, data.length, 4], [22, data.length, 4], [26, name.length, 2], [28, 0, 2]]
+			.forEach(([at, v, n]) => (n === 4 ? local.setUint32(at, v, true) : local.setUint16(at, v, true)));
+		const dir = new DataView(new ArrayBuffer(46));
+		[[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, 0, 2], [14, 0x5021, 2], [16, crc, 4], [20, data.length, 4], [24, data.length, 4], [28, name.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, offset, 4]]
+			.forEach(([at, v, n]) => (n === 4 ? dir.setUint32(at, v, true) : dir.setUint16(at, v, true)));
+		parts.push(new Uint8Array(local.buffer), name, data);
+		central.push(new Uint8Array(dir.buffer), name);
+		offset += 30 + name.length + data.length;
+	}
+	const size = central.reduce((a, p) => a + p.length, 0);
+	const end = new DataView(new ArrayBuffer(22));
+	const count = Object.keys(files).length;
+	[[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, count, 2], [10, count, 2], [12, size, 4], [16, offset, 4], [20, 0, 2]]
+		.forEach(([at, v, n]) => (n === 4 ? end.setUint32(at, v, true) : end.setUint16(at, v, true)));
+	const all = [...parts, ...central, new Uint8Array(end.buffer)];
+	const out = new Uint8Array(all.reduce((a, p) => a + p.length, 0));
+	let at = 0;
+	for (const p of all) { out.set(p, at); at += p.length; }
+	return out;
+}
+
+/**
+ * The table cards for these groups (from tableCardGroups) as .docx bytes.
+ * `logo` is the club emblem as PNG bytes, or null to leave it out.
+ */
+function tableCardsDocx(groups, { date = new Date().toISOString().slice(0, 10), logo = null } = {}) {
+	const files = {
+		'[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+		'_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+		'word/_rels/document.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${logo ? '<Relationship Id="rLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/emblem.png"/>' : ''}</Relationships>`,
+		'word/document.xml': docxDocument(groups, { date, logo: !!logo }),
+	};
+	if (logo) files['word/media/emblem.png'] = logo;
+	return docxZip(files);
 }
 
 
@@ -2020,6 +2450,18 @@ function load() {
 const loaded = load();
 const store = new Store(loaded.state);
 store.undoStack = loaded.undo;
+
+// The club roster lives in its own key: it is large and never part of undo.
+const ROSTER_KEY = 'tsl_roster';
+/** A roster built into a shared copy (`npm run build:single -- --roster file.csv`); empty here. */
+const BUNDLED_ROSTER = [];
+let roster = BUNDLED_ROSTER;
+try {
+	roster = JSON.parse(localStorage.getItem(ROSTER_KEY)) ?? BUNDLED_ROSTER;
+} catch {
+	roster = BUNDLED_ROSTER;
+}
+store.setRoster(roster);
 let lastSaved = '';
 
 store.subscribe(() => {
@@ -2537,14 +2979,28 @@ function renderHistory(s) {
 let renaming = null;
 
 /** A name's normal markup, or a text box with Save while that name is being edited. */
-function nameEditor(kind, id, name, normal) {
+function nameEditor(kind, id, name, normal, charter = null) {
 	if (renaming?.kind !== kind || renaming.id !== id) return normal;
-	return `<span class="inline rename"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" /><button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+	// A fighter's charter is edited beside the name, picked from the roster's charters or typed.
+	const charterBox = charter === null ? '' : `<input id="pool-charter" list="pool-charters" maxlength="40" value="${esc(charter)}" placeholder="Charter" autocomplete="off" />`;
+	return `<span class="inline rename${charter === null ? '' : ' with-charter'}"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" />${charterBox}<button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+}
+
+/** Charters to pick from: the roster's, then any typed in this event. */
+function pickCharters(p) {
+	return [...new Set([...roster.map(r => r.charter), ...p.fighters.map(f => f.charter)].filter(Boolean))].sort();
+}
+
+/** Names offered when entering a matchup: this event's fighters first, then the roster. */
+function pickNames(p) {
+	const seen = new Set(p.fighters.map(f => f.name.toLowerCase()));
+	return [...p.fighters.map(f => f.name), ...roster.map(r => r.name).filter(n => !seen.has(n.toLowerCase()))];
 }
 
 function renderPool(s) {
 	const p = s.pool;
 	const g = p.groups.find(x => x.id === p.view);
+	const fought = p.bouts.some(b => b.result);
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
@@ -2555,7 +3011,7 @@ function renderPool(s) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
-		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Rename ${esc(f.name)}">${esc(f.name)}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}">${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
@@ -2567,7 +3023,8 @@ function renderPool(s) {
 		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
 			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
-			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
+			<datalist id="pool-charters">${pickCharters(p).map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
+			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
 			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
@@ -2583,6 +3040,27 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		<section>
+			<h3>Roster${roster.length ? ` · ${roster.length}` : ''}</h3>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="roster-import">Import roster</button>
+				${roster.length ? '<button type="button" class="btn" data-action="roster-clear">Clear roster</button>' : ''}
+				<input type="file" id="roster-file" accept=".csv,.txt,text/csv,text/plain" hidden />
+			</div>
+		</section>
+		${p.groups.length ? `<section>
+			<h3>Results</h3>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
+				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
+				<button type="button" class="btn" data-action="results-json" ${fought ? '' : 'disabled'}>Download results (JSON)</button>
+			</div>
+		</section>` : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
@@ -2802,23 +3280,62 @@ function openDisplay() {
 	if (!win) setView('display');
 }
 
-function exportCSV() {
-	const blob = new Blob([logToCSV(store.state)], { type: 'text/csv' });
+function download(text, type, filename) {
 	const a = document.createElement('a');
-	const s = store.state;
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_');
+	a.href = URL.createObjectURL(new Blob([text], { type }));
+	a.download = filename;
 	a.click();
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function exportCSV() {
+	const s = store.state;
+	download(logToCSV(s), 'text/csv', `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_'));
+}
+
+function exportResults(kind) {
+	const pool = store.state.pool;
+	const name = `tsl-results-${new Date().toISOString().slice(0, 10)}.${kind}`;
+	if (kind === 'csv') download(resultsToCSV(pool), 'text/csv', name);
+	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
+}
+
+function saveRoster(list) {
+	roster = list;
+	store.setRoster(roster);
+	try {
+		// Kept even when empty, so a cleared roster doesn't come back from a built-in one.
+		localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
+	} catch {
+		// Storage full or blocked: the roster lasts until the page is closed.
+	}
+	refreshPool();
+}
+
+async function importRoster(file) {
+	const list = parseRoster(await file.text());
+	if (!list.length) {
+		await confirmAction('No names found in that file. Use a CSV with a name column, or one name per line.', 'OK');
+		return;
+	}
+	saveRoster(list);
+}
+
+async function exportTableCards() {
+	let logo = null;
+	try {
+		logo = new Uint8Array(await (await fetch('data:image/png;base64,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')).arrayBuffer());
+	} catch {
+		// No emblem (offline before it was cached): the cards still work without it.
+	}
+	const today = new Date().toISOString().slice(0, 10);
+	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo });
+	download(docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `tsl-table-cards-${today}.docx`);
+}
+
 function saveBackup() {
-	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
-	const a = document.createElement('a');
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`;
-	a.click();
-	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+	const text = JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1);
+	download(text, 'application/json', `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`);
 }
 
 async function restoreBackup(file) {
@@ -2840,6 +3357,13 @@ async function restoreBackup(file) {
 const actions = {
 	'backup-save': saveBackup,
 	'backup-restore': () => $('#backup-file').click(),
+	'results-csv': () => exportResults('csv'),
+	'results-json': () => exportResults('json'),
+	'results-docx': exportTableCards,
+	'roster-import': () => $('#roster-file').click(),
+	'roster-clear': async () => {
+		if (await confirmAction(`Clear the roster of ${roster.length} fighters? Fighters already in matchups stay.`, 'Clear')) saveRoster([]);
+	},
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };
@@ -2934,7 +3458,7 @@ const actions = {
 		const name = $('#pool-rename')?.value ?? '';
 		renaming = null;
 		if (kind === 'group') store.renamePoolGroup(id, name);
-		else if (kind === 'fighter') store.renamePoolFighter(id, name);
+		else if (kind === 'fighter') store.renamePoolFighter(id, name, $('#pool-charter')?.value ?? '');
 		refreshPool();
 	},
 	'pool-bout-remove': el => {
@@ -3059,6 +3583,17 @@ app.addEventListener('change', e => {
 	}
 });
 
+poolDialog.addEventListener('change', e => {
+	if (e.target.id === 'roster-file') {
+		const [file] = e.target.files;
+		e.target.value = '';
+		if (file) importRoster(file);
+		return;
+	}
+	const key = e.target.dataset.event;
+	if (key) store.setPoolEvent({ [key]: e.target.value });
+});
+
 // Settings fields apply as soon as they change.
 settingsDialog.addEventListener('input', e => {
 	const el = e.target;
@@ -3112,7 +3647,7 @@ poolDialog.addEventListener('keydown', e => {
 		return;
 	}
 	if (e.key !== 'Enter') return;
-	if (e.target.id === 'pool-rename') {
+	if (e.target.id === 'pool-rename' || e.target.id === 'pool-charter') {
 		e.preventDefault();
 		actions['rename-save']();
 	} else if (e.target.id === 'pool-group-name') {

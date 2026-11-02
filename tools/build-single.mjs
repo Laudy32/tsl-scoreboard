@@ -1,7 +1,11 @@
 // Builds tsl-scoreboard.html: the whole scoreboard in one file that opens
 // straight from disk with no internet, e.g. sent by email.
 // Run it with `npm run build:single` after changing anything under css/ js/ or assets/.
+// `npm run build:single -- --roster ladder.csv --out shared.html` builds a copy with
+// that roster built in, for sharing; keep such copies out of the repo.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parseRoster } from '../js/state.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,11 +13,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = path => readFileSync(join(root, path), 'utf8');
 const dataUri = (path, type) => `data:${type};base64,${readFileSync(join(root, path)).toString('base64')}`;
 
-export function buildSingle() {
+export function buildSingle({ roster = [] } = {}) {
 	const state = read('js/state.js').replace(/^export /gm, '');
-	const app = read('js/app.js').replace(/^import \{[\s\S]*?\} from '\.\/state\.js';\n/, '');
+	const cards = read('js/tablecards.js').replace(/^export /gm, '');
+	const app = read('js/app.js').replace(/^import \{[\s\S]*?\} from '\.\/[\w]+\.js';\n/gm, '')
+		.replace('const BUNDLED_ROSTER = [];', () => `const BUNDLED_ROSTER = ${JSON.stringify(roster)};`);
 	const emblem = dataUri('assets/emblem-256.png', 'image/png');
-	const code = `${state}\n${app}`.replaceAll('assets/emblem-256.png', emblem).replaceAll('</script', '<\\/script');
+	const code = `${state}\n${cards}\n${app}`.replaceAll('assets/emblem-256.png', emblem).replaceAll('</script', '<\\/script');
 	const css = read('css/style.css').replace(/url\(\.\.\/assets\/fonts\/([\w-]+\.woff2)\)/g, (_, f) => `url(${dataUri(`assets/fonts/${f}`, 'font/woff2')})`);
 	const icon = dataUri('assets/saber-icon-192.png', 'image/png');
 	return read('index.html')
@@ -27,7 +33,13 @@ export function buildSingle() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-	const out = join(root, 'tsl-scoreboard.html');
-	writeFileSync(out, buildSingle());
-	console.log(`Wrote ${out}`);
+	const arg = name => {
+		const i = process.argv.indexOf(name);
+		return i > 0 ? process.argv[i + 1] : null;
+	};
+	const rosterFile = arg('--roster');
+	const roster = rosterFile ? parseRoster(readFileSync(resolve(rosterFile), 'utf8')) : [];
+	const out = arg('--out') ? resolve(arg('--out')) : join(root, 'tsl-scoreboard.html');
+	writeFileSync(out, buildSingle({ roster }));
+	console.log(`Wrote ${out}${rosterFile ? ` with ${roster.length} fighters on the roster` : ''}`);
 }

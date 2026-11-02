@@ -45,6 +45,31 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
 - Round wins shown as dots, with an optional "rounds to win the match"
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
+- Roster: import the club roster once (the rankings' `ladder.csv`, any CSV
+  with a name column and an optional charter or group column, or one name
+  per line). Matchup names then autofill from it and take its exact
+  spelling and charter; a name not on it is added as typed. The roster is
+  kept on the device, apart from the scoreboard's undo history. The charter
+  shows under the fighter's name on the scoreboard and table cards; tap a
+  fighter in Matchups to fix their name or charter. To share a copy with a
+  roster built in, run `npm run build:single -- --roster ladder.csv --out
+  shared.html` (keep the roster file and that copy out of the repo)
+- Results download from Matchups:
+  - Table cards as a Word file in the club's table card layout: a page per
+    group, a band per match, points, winner (with how it was won), warnings
+    and a Checked column, standings for a round robin, and lines for the
+    Director, timekeeper, line judges and table judge to sign. Bouts fought
+    are filled in, a no-show match is crossed out, and the rest are blank to
+    fill by hand
+  - A CSV with one row per bout fought, in the format the Saber Legion
+    rankings importer reads: event, tier, division, a stable bout id, date
+    and time the result was recorded, pool or bracket, pool letter, round,
+    play order, bracket label (semifinal, third_place, final, taken from the
+    group's name), fighters, scores, winner (A, B or draw), result type and
+    notes. A no-show is a scratch with no score, so it isn't rated as a loss;
+    a black card is a forfeit. Name pool groups "Pool A", "Pool B" and so on,
+    and bracket groups in the order they're fought (e.g. "Quarterfinals",
+    "Semifinals", "Bronze", "Final"). The same rows are also available as JSON
 - Spectator display (Display button or F) that stays in sync with the
   controls, for a second monitor or TV on the same computer
 - Names, subtitles, seven colors, swap sides
@@ -64,8 +89,11 @@ different devices do not sync yet.
   page cannot message another device, and it would not work in the offline single file.
   Mirroring the screen was considered: it shows one screen only, so the controls would be
   on the TV too.
-- **Challonge export.** Download or copy pool and group results, keyed to participants, then
-  report results straight to Challonge through the same kind of relay.
+- **Send results to Challonge.** Each organizer pastes their own Challonge API key once (kept
+  on their device), picks the tournament, checks a preview that matches our fighters to
+  Challonge participants, and sends. It needs a small relay (for example a Cloudflare Worker)
+  because Challonge can't be called from a web page directly; the same relay could later
+  report each bout live.
 - **Standings on their own screen** (a separate view, so the TV scoreboard stays clear).
 - **Automatic single-elimination brackets** from a seeded list, with byes.
 - **Fighter roster** remembered between events, with autofill in Matchups.

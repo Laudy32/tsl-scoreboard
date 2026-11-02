@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
 	Store, initialState, DEFAULT_SETTINGS, timeLeft, parseClock, formatClock, matchWinner, normalize,
 	activePreset, describeEvent, usesRounds, presetNote, tallyResult, recordScores, decisionOf, leader, isUntimed, hasCards, CARD_REASONS, isRunning, medicalLeft, MEDICAL_HOLD, attemptLeft, roundRobin, poolStandings, boutDecided, restLeft, REST_TIME,
+	resultRows, resultsToCSV, resultsToJSON, tableCardGroups, parseRoster,
 } from '../js/state.js';
+import { tableCardsDocx } from '../js/tablecards.js';
 
 const D = DEFAULT_SETTINGS.duration;
 
@@ -1256,4 +1258,170 @@ test('pool standings: a three-way tie in a circle falls to points for, then poin
 	const rows = poolStandings(pool);
 	// Each has one win and one win over a tied fighter, so points for decide: F1 has 12, F2 has 15 and F3 has 17.
 	assert.deepEqual(rows.map(r => r.name), ['F3', 'F2', 'F1']);
+});
+
+test('results export: rows in the rankings format, one per bout fought, in play order', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy', 'Di']);
+	store.setDivision('Standard');
+	store.setPoolEvent({ name: ' Cavalry Cup III Standard ', tier: 'Regional' });
+	const names = id => s().pool.fighters.find(f => f.id === id).name;
+	const [b1, b2, b3] = s().pool.bouts;
+	store.loadPoolBout(b1.id);
+	for (let i = 0; i < 10; i++) store.addPoint(1);
+	store.addPoint(0);
+	store.swapSides();
+	store.recordPoolBout();
+	store.loadPoolBout(b3.id);
+	store.giveCard(0, 'black');
+	store.recordPoolBout();
+
+	const rows = resultRows(s().pool);
+	assert.equal(rows.length, 2, 'the bout not fought yet is left out');
+	const { date, time, ...rest } = rows[0];
+	assert.deepEqual(rest, {
+		event_name: 'Cavalry Cup III Standard', event_tier: 'Regional', division: 'standard', bout_id: `B${b1.id}`,
+		stage: 'pool', pool: s().pool.groups[0].name, round: 1, play_order: 1, bout_label: '',
+		fighter_a: names(b1.a), fighter_b: names(b1.b), charter_a: '', charter_b: '',
+		score_a: 1, score_b: 10, winner: 'B', result_type: 'normal', notes: '', group: s().pool.groups[0].name,
+	});
+	assert.match(date, /^\d{4}-\d\d-\d\d$/);
+	assert.match(time, /^\d\d:\d\d$/);
+	assert.equal(b2.result, null);
+	assert.deepEqual([rows[1].round, rows[1].play_order], [2, 1], 'four fighters fight two bouts a round');
+	assert.equal(rows[1].result_type, 'forfeit');
+	assert.equal(rows[1].notes, `Forfeit; ${names(b3.a)}: Black`, 'the card goes with the fighter it was given to');
+
+	const csv = resultsToCSV(s().pool).split('\n');
+	assert.equal(csv.length, 3);
+	assert.equal(csv[0], '"event_name","event_tier","division","bout_id","date","time","stage","pool","round","play_order","bout_label","fighter_a","fighter_b","charter_a","charter_b","score_a","score_b","winner","result_type","notes"');
+
+	const json = resultsToJSON(s().pool, 0);
+	assert.equal(json.format, 'tsl-results');
+	assert.equal(json.event.tier, 'Regional');
+	assert.equal(json.bouts.length, 2);
+	assert.equal(json.groups[0].unfought.length, 4);
+	assert.equal(json.fighters.find(f => f.cards.black).name, names(b3.a));
+});
+
+test('results export: bracket groups are rounds in order, labelled from their names, with "Pool A" as pool A', () => {
+	const { store, s } = setup();
+	const win = () => { for (let i = 0; i < 10; i++) store.addPoint(0); store.advancePool() || store.recordPoolBout(); };
+	store.addPoolGroup('Pool A');
+	['Ana', 'Bo'].forEach(n => store.addPoolFighter(n));
+	store.buildPoolBouts();
+	store.addPoolGroup('Semifinals');
+	store.addPoolBout('Ana', 'Cy'); store.addPoolBout('Bo', 'Di');
+	store.addPoolGroup('Bronze');
+	store.addPoolBout('Cy', 'Di');
+	store.addPoolGroup('Final');
+	store.addPoolBout('Ana', 'Bo');
+	store.loadPoolBout(s().pool.bouts[0].id);
+	for (let i = 0; i < 5; i++) win();
+	const rows = resultRows(s().pool);
+	assert.deepEqual(rows.map(r => [r.stage, r.pool, r.round, r.play_order, r.bout_label]), [
+		['pool', 'A', 1, 1, ''],
+		['bracket', '', 1, 1, 'semifinal'],
+		['bracket', '', 1, 2, 'semifinal'],
+		['bracket', '', 2, 1, 'third_place'],
+		['bracket', '', 3, 1, 'final'],
+	]);
+});
+
+test('results export: Unity decisions, no-shows as scratches, and results saved before the export existed', () => {
+	const u = pool(['Ana', 'Bo'], {});
+	u.store.applyPreset('unity');
+	u.store.loadPoolBout(1);
+	u.store.setTally(0, 0, 9); u.store.setTally(0, 1, 5);
+	u.store.setTally(1, 0, 4); u.store.setTally(1, 1, 6);
+	u.store.setTally(2, 0, 8); u.store.setTally(2, 1, 6);
+	u.store.endRoundNow();
+	u.store.publishTally();
+	u.store.recordPoolBout();
+	assert.equal(resultRows(u.s().pool)[0].notes, 'Split decision');
+
+	const n = pool(['Ana', 'Bo']);
+	n.store.loadPoolBout(1);
+	n.store.noShow(1);
+	n.store.recordPoolBout();
+	const ns = resultRows(n.s().pool)[0];
+	const absent = n.s().pool.bouts[0].result.winner === n.s().pool.bouts[0].a ? ns.fighter_b : ns.fighter_a;
+	assert.equal(ns.result_type, 'scratch', 'a no-show is not rated as a loss');
+	assert.deepEqual([ns.score_a, ns.score_b], ['', ''], 'and is crossed out, not exported as 10-0');
+	assert.equal(ns.notes, `${absent} did not show`);
+	const card = tableCardGroups(n.s().pool)[0].bouts[0].result;
+	assert.equal(card.noShow, true);
+	const xml = new TextDecoder().decode(tableCardsDocx(tableCardGroups(n.s().pool)));
+	assert.ok(xml.includes('<w:strike/>') && xml.includes('NO-SHOW'), 'the card crosses the match out');
+	assert.ok(!xml.includes('<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">10<'), 'with no 10 in the points column');
+
+	const old = n.s().pool;
+	delete old.event;
+	delete old.bouts[0].result.decision;
+	delete old.bouts[0].result.at;
+	const row = resultRows(old)[0];
+	assert.equal(row.result_type, 'normal');
+	assert.deepEqual([row.date, row.time, row.event_name], ['', '', '']);
+	assert.deepEqual(normalize({ ...initialState(), pool: old }).pool.event, { name: '', tier: '' });
+});
+
+test('table cards: every matchup in order, filled in once fought, and a Word file that holds them', () => {
+	const { store, s } = pool(['Ana', 'Bo', 'Cy']);
+	const [b1] = s().pool.bouts;
+	store.loadPoolBout(b1.id);
+	store.giveCard(1, 'yellow', 'Foot fault');
+	store.giveCard(1, 'red', 'Other');
+	store.removeCard(1, 'red');
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.swapSides();
+	store.recordPoolBout();
+
+	const [g] = tableCardGroups(s().pool);
+	assert.equal(g.robin, true);
+	assert.equal(g.bouts.length, 3);
+	const name = id => s().pool.fighters.find(f => f.id === id).name;
+	assert.deepEqual(g.bouts[0], {
+		number: 1,
+		fighters: [name(b1.a), name(b1.b)],
+		charters: ['', ''],
+		result: { noShow: false, scores: [10, 0], winner: 0, decision: 'Points', cards: ['', 'Yellow (Foot fault)'] },
+	}, 'a card taken back is left off');
+	assert.equal(g.bouts[1].result, null);
+	assert.equal(g.standings[0].name, name(b1.a));
+
+	const docx = tableCardsDocx([g], { date: '2026-11-02' });
+	assert.equal(String.fromCharCode(docx[0], docx[1]), 'PK');
+	const text = new TextDecoder().decode(docx);
+	for (const part of ['[Content_Types].xml', 'word/document.xml', 'Yellow (Foot fault)', 'FIGHTERS ADVANCING', '2026-11-02']) assert.ok(text.includes(part), part);
+	assert.ok(!text.includes('emblem.png'), 'no logo given, none linked');
+});
+
+test('roster: reads the ladder CSV or a plain list of names', () => {
+	const ladder = '\uFEFFrank,name,rating,group\r\n1,"LeGault, Ryan",1541.02,Tennessee\r\n2,Joseph  Kim,1265.84,"Cal ""North"""\r\n3,joseph kim,1200,X\r\n\r\n';
+	assert.deepEqual(parseRoster(ladder), [
+		{ name: 'Joseph Kim', charter: 'Cal "North"' },
+		{ name: 'LeGault, Ryan', charter: 'Tennessee' },
+	], 'quoted cells, extra spaces, and the first of two spellings of one name');
+	assert.deepEqual(parseRoster('Ana Reyes\nBo Chen\n'), [{ name: 'Ana Reyes', charter: '' }, { name: 'Bo Chen', charter: '' }]);
+	assert.deepEqual(parseRoster(''), []);
+});
+
+test('roster: a fighter picked from it gets its spelling and charter, and the export carries the charter', () => {
+	const { store, s } = setup();
+	store.setRoster(parseRoster('name,group\nJose Alberto Romero,Tennessee\nStevie Reyes,Kentucky'));
+	assert.equal(store.addPoolBout('jose alberto  romero', 'New Person'), true);
+	const [a, b] = s().pool.fighters;
+	assert.deepEqual([a.name, a.charter], ['Jose Alberto Romero', 'Tennessee']);
+	assert.deepEqual([b.name, b.charter], ['New Person', undefined], 'a name not on the roster is added as typed');
+	store.loadPoolBout(1);
+	assert.deepEqual(s().fighters.map(f => f.subtitle), ['Tennessee', ''], 'the charter shows under the name on the scoreboard');
+	assert.equal(store.renamePoolFighter(b.id, 'New  Person', ' Rebel Sabers '), true, 'name and charter can be fixed');
+	assert.deepEqual([s().fighters[1].name, s().fighters[1].subtitle], ['New Person', 'Rebel Sabers']);
+	assert.equal(store.renamePoolFighter(a.id, 'Jose Alberto Romero'), true);
+	assert.equal(s().pool.fighters[0].charter, 'Tennessee', 'a rename without a charter keeps it');
+	for (let i = 0; i < 10; i++) store.addPoint(0);
+	store.recordPoolBout();
+	const row = resultRows(s().pool)[0];
+	assert.deepEqual([row.charter_a, row.charter_b], ['Tennessee', 'Rebel Sabers']);
+	assert.deepEqual(tableCardGroups(s().pool)[0].bouts[0].charters, ['Tennessee', 'Rebel Sabers']);
+	assert.equal(JSON.stringify(s()).includes('Stevie'), false, 'the roster is not saved in the state or its undo');
 });

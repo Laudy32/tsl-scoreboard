@@ -150,7 +150,7 @@ function fighter(color) {
 }
 
 function emptyPool() {
-	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null };
+	return { fighters: [], groups: [], view: null, bouts: [], active: null, nextId: 1, lastFinish: null, event: { name: '', tier: '' } };
 }
 
 export function initialState(settings = DEFAULT_SETTINGS) {
@@ -212,6 +212,7 @@ export function normalize(saved) {
 /** A pool saved before groups existed gets one group holding its fighters and bouts. */
 function normalizePool(saved) {
 	const pool = { ...emptyPool(), ...saved };
+	pool.event = { ...emptyPool().event, ...saved?.event };
 	pool.groups = (pool.groups ?? []).map(g => ({ ...g, fighters: [...(g.fighters ?? [])] }));
 	if (pool.bouts.some(b => b.group == null)) {
 		let g = pool.groups[0];
@@ -279,6 +280,20 @@ export function boutDecided(s, now = Date.now()) {
 
 /** Scores to record for the bout: the live scores, or the judges' recorded scores in Unity. */
 export const boutScores = s => (s.settings.liveScore ? s.fighters.map(f => f.score) : tallyResult(s).scores);
+
+/**
+ * How a decided bout was won, for the results export: 'points', 'sudden death',
+ * the judges' 'unanimous' or 'split' decision, 'marshal' (the Marshal picked the
+ * winner of a judges' draw), 'forfeit' (black card) or 'no-show'.
+ */
+export function boutDecision(s) {
+	if (s.forfeit !== null && s.forfeit !== undefined) return s.noShow ? 'no-show' : 'forfeit';
+	if (s.tally?.published) {
+		const d = decisionOf(s.tally.votes);
+		return d === 'draw' ? 'marshal' : d;
+	}
+	return s.suddenDeath ? 'sudden death' : 'points';
+}
 
 /** A fighter who fights back to back gets this long to rest. */
 export const REST_TIME = 60_000;
@@ -362,6 +377,13 @@ export class Store {
 		this.undoStack = [];
 		this.now = now;
 		this.listeners = new Set();
+		/** The club roster by lowercase name: { name, charter }. Kept outside the state so undo snapshots stay small. */
+		this.roster = new Map();
+	}
+
+	/** Sets the club roster that new pool fighters take their spelling and charter from. */
+	setRoster(list) {
+		this.roster = new Map((list ?? []).map(r => [r.name.toLowerCase(), r]));
 	}
 
 	subscribe(fn) {
@@ -926,11 +948,13 @@ export class Store {
 
 	/** The pool fighter with this name (any capitalisation), added if new. Returns its id, or null for a blank name. */
 	#poolFighter(s, name) {
-		const clean = String(name).trim().slice(0, 40);
+		const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 		if (!clean) return null;
 		const found = s.pool.fighters.find(f => f.name.toLowerCase() === clean.toLowerCase());
 		if (found) return found.id;
-		s.pool.fighters.push({ id: s.pool.nextId, name: clean, cards: noCards() });
+		// A fighter on the roster gets the roster's spelling and charter.
+		const listed = this.roster.get(clean.toLowerCase());
+		s.pool.fighters.push({ id: s.pool.nextId, name: listed?.name ?? clean, ...(listed?.charter ? { charter: listed.charter } : {}), cards: noCards() });
 		return s.pool.nextId++;
 	}
 
@@ -1054,14 +1078,22 @@ export class Store {
 		}, { undoable: false });
 	}
 
-	/** Fixes a fighter's name everywhere: the pool, and the scoreboard if they are on it. */
-	renamePoolFighter(id, name) {
+	/**
+	 * Fixes a fighter's name, and their charter when given, everywhere: the pool,
+	 * and the scoreboard if they are on it (the charter shows under the name).
+	 */
+	renamePoolFighter(id, name, charter) {
 		return this.apply(s => {
 			const f = s.pool.fighters.find(x => x.id === id);
-			const clean = String(name).trim().slice(0, 40);
+			const clean = String(name).trim().replace(/\s+/g, ' ').slice(0, 40);
 			if (!f || !clean || s.pool.fighters.some(x => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
 			f.name = clean;
-			for (const sf of s.fighters) if (sf.poolId === id) sf.name = clean;
+			if (charter !== undefined) f.charter = String(charter).trim().replace(/\s+/g, ' ').slice(0, 40);
+			for (const sf of s.fighters) {
+				if (sf.poolId !== id) continue;
+				sf.name = clean;
+				if (charter !== undefined) sf.subtitle = f.charter;
+			}
 		}, { undoable: false });
 	}
 
@@ -1105,7 +1137,7 @@ export class Store {
 		Object.assign(s, { ...fresh, pool: s.pool });
 		[bout.a, bout.b].forEach((id, i) => {
 			const pf = s.pool.fighters.find(f => f.id === id);
-			Object.assign(s.fighters[i], { name: pf.name, subtitle: '', poolId: id, cards: structuredClone(pf.cards) });
+			Object.assign(s.fighters[i], { name: pf.name, subtitle: pf.charter ?? '', poolId: id, cards: structuredClone(pf.cards) });
 		});
 		s.pool.active = boutId;
 	}
@@ -1125,6 +1157,13 @@ export class Store {
 		bout.result = {
 			scores: [scores[ids.indexOf(bout.a)], scores[ids.indexOf(bout.b)]],
 			winner: w === null ? null : ids[w],
+			decision: boutDecision(s),
+			division: s.settings.division,
+			at: this.now(),
+			// Cards given in this bout (not taken back), for [a, b].
+			cards: [bout.a, bout.b].map(id => s.log
+				.filter(e => e.kind === 'card' && !e.voided && ids[e.side] === id)
+				.map(e => ({ card: e.effective, reason: e.reason ?? '' }))),
 		};
 		s.fighters.forEach(f => {
 			const pf = s.pool.fighters.find(x => x.id === f.poolId);
@@ -1155,6 +1194,15 @@ export class Store {
 		return this.apply(s => {
 			if (s.pool.active !== null && this.#recordBout(s) === false) return false;
 			return this.#loadBout(s, next.id);
+		}, { undoable: false });
+	}
+
+	/** The event the results belong to, for the rankings export: { name, tier }. */
+	setPoolEvent(changes) {
+		return this.apply(s => {
+			for (const key of ['name', 'tier']) {
+				if (key in changes) s.pool.event[key] = String(changes[key] ?? '').trim().slice(0, 60);
+			}
 		}, { undoable: false });
 	}
 
@@ -1320,8 +1368,195 @@ export function describeEvent(s, e) {
 	}
 }
 
+/** Splits one CSV line into cells, allowing quoted cells with commas and "" for a quote. */
+function csvCells(line) {
+	const cells = [];
+	let cell = '';
+	let quoted = false;
+	for (let i = 0; i < line.length; i++) {
+		const c = line[i];
+		if (quoted) {
+			if (c === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+			else if (c === '"') quoted = false;
+			else cell += c;
+		} else if (c === '"') quoted = true;
+		else if (c === ',') { cells.push(cell); cell = ''; }
+		else cell += c;
+	}
+	cells.push(cell);
+	return cells.map(v => v.trim());
+}
+
+/**
+ * Reads a roster file: a CSV with a name column (name, fighter or player) and,
+ * optionally, a charter column (charter or group, as in the rankings' ladder.csv),
+ * or just one name per line. Returns [{ name, charter }], one per name, sorted by name.
+ */
+export function parseRoster(text) {
+	const lines = String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+	if (!lines.length) return [];
+	const head = csvCells(lines[0]).map(h => h.toLowerCase());
+	let nameCol = head.findIndex(h => ['name', 'fighter', 'player'].includes(h));
+	const charterCol = head.findIndex(h => ['charter', 'group'].includes(h));
+	const body = nameCol >= 0 ? lines.slice(1) : lines;
+	if (nameCol < 0) nameCol = 0;
+	const byName = new Map();
+	for (const line of body) {
+		const cells = csvCells(line);
+		const name = (cells[nameCol] ?? '').replace(/\s+/g, ' ').slice(0, 40);
+		if (!name || byName.has(name.toLowerCase())) continue;
+		byName.set(name.toLowerCase(), { name, charter: charterCol >= 0 ? cells[charterCol] ?? '' : '' });
+	}
+	return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Cards from a recorded bout as text, e.g. "Yellow (Foot fault), Red". */
+export function cardsText(cards = []) {
+	return cards.map(c => `${CARD_NAMES[c.card] ?? c.card}${c.reason ? ` (${c.reason})` : ''}`).join(', ');
+}
+
+/** Readable names for how a bout was won, as written on the table cards. */
+export const DECISION_NAMES = {
+	points: 'Points', 'sudden death': 'Sudden death', unanimous: 'Unanimous decision', split: 'Split decision',
+	marshal: "Marshal's decision", forfeit: 'Forfeit', 'no-show': 'No-show',
+};
+
+/**
+ * What the table cards show, one entry per group: its fighters, every matchup
+ * in fighting order (with the result once recorded) and, for a round robin, the standings.
+ */
+export function tableCardGroups(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
+	return pool.groups.map(g => {
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		return {
+			name: g.name,
+			robin: !!g.robin,
+			division: bouts.find(b => b.result?.division)?.result.division ?? '',
+			fighters: g.fighters.map(name),
+			charters: g.fighters.map(charter),
+			bouts: bouts.map((b, i) => ({
+				number: i + 1,
+				fighters: [name(b.a), name(b.b)],
+				charters: [charter(b.a), charter(b.b)],
+				result: b.result && {
+					noShow: b.result.decision === 'no-show',
+					scores: b.result.scores,
+					winner: b.result.winner === null ? null : b.result.winner === b.a ? 0 : 1,
+					decision: DECISION_NAMES[b.result.decision] ?? '',
+					cards: [0, 1].map(i => cardsText(b.result.cards?.[i])),
+				},
+			})),
+			standings: g.robin ? poolStandings(pool, g.id) : null,
+		};
+	});
+}
+
+/** A bracket bout's label for the rankings, from its group's name: semifinal, third_place, final or ''. */
+function boutLabel(groupName) {
+	const n = groupName.toLowerCase();
+	if (/bronze|3rd|third/.test(n)) return 'third_place';
+	if (/semi/.test(n)) return 'semifinal';
+	if (/final|gold/.test(n)) return 'final';
+	return '';
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+
+/** The pool letter for the rankings: "Pool A" gives "A"; any other name is kept as it is. */
+const poolLetter = name => name.match(/^pool\s+(\S+)$/i)?.[1] ?? name;
+
+/**
+ * Every recorded bout, in play order, in the format the rankings importer reads
+ * (the Ranking Update handoff, section 3). Round robin groups are pools and the
+ * rest are bracket rounds in the order they were made. A no-show is a scratch
+ * with no score, so it isn't rated as a loss; a black card is a forfeit.
+ * Results saved before a field existed leave it ''.
+ */
+export function resultRows(pool) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	const charter = id => pool.fighters.find(f => f.id === id)?.charter ?? '';
+	const event = pool.event ?? { name: '', tier: '' };
+	const rows = [];
+	let bracketRound = 0;
+	for (const g of pool.groups) {
+		const bouts = pool.bouts.filter(b => b.group === g.id);
+		if (!g.robin && bouts.length) bracketRound++;
+		// A round robin plays everyone once per round: half the fighters' worth of bouts.
+		const perRound = Math.max(1, Math.floor(g.fighters.length / 2));
+		bouts.forEach((b, i) => {
+			if (!b.result) return;
+			const { winner, decision = '' } = b.result;
+			const at = b.result.at ? new Date(b.result.at) : null;
+			const scratch = decision === 'no-show';
+			const cards = [cardsText(b.result.cards?.[0]), cardsText(b.result.cards?.[1])];
+			const notes = [
+				scratch ? `${name(winner === b.a ? b.b : b.a)} did not show` : (DECISION_NAMES[decision] && decision !== 'points' ? DECISION_NAMES[decision] : ''),
+				cards[0] && `${name(b.a)}: ${cards[0]}`,
+				cards[1] && `${name(b.b)}: ${cards[1]}`,
+			].filter(Boolean).join('; ');
+			rows.push({
+				event_name: event.name,
+				event_tier: event.tier,
+				division: (b.result.division ?? '').toLowerCase(),
+				bout_id: `B${b.id}`,
+				date: at ? `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}` : '',
+				time: at ? `${pad2(at.getHours())}:${pad2(at.getMinutes())}` : '',
+				stage: g.robin ? 'pool' : 'bracket',
+				pool: g.robin ? poolLetter(g.name) : '',
+				round: g.robin ? Math.floor(i / perRound) + 1 : bracketRound,
+				play_order: g.robin ? (i % perRound) + 1 : i + 1,
+				bout_label: g.robin ? '' : boutLabel(g.name),
+				fighter_a: name(b.a),
+				fighter_b: name(b.b),
+				charter_a: charter(b.a),
+				charter_b: charter(b.b),
+				score_a: scratch ? '' : b.result.scores[0],
+				score_b: scratch ? '' : b.result.scores[1],
+				winner: winner === null ? 'draw' : winner === b.a ? 'A' : 'B',
+				result_type: scratch ? 'scratch' : decision === 'forfeit' ? 'forfeit' : 'normal',
+				notes,
+				group: g.name,
+			});
+		});
+	}
+	return rows;
+}
+
+const csvCell = v => `"${String(v).replace(/"/g, '""')}"`;
+
+/** Columns of the results CSV, as the rankings importer expects them. */
+export const RESULT_COLUMNS = ['event_name', 'event_tier', 'division', 'bout_id', 'date', 'time', 'stage', 'pool', 'round', 'play_order', 'bout_label',
+	'fighter_a', 'fighter_b', 'charter_a', 'charter_b', 'score_a', 'score_b', 'winner', 'result_type', 'notes'];
+
+/** The results as a CSV in the rankings format; it opens in Excel or Google Sheets too. */
+export function resultsToCSV(pool) {
+	return [RESULT_COLUMNS, ...resultRows(pool).map(r => RESULT_COLUMNS.map(c => r[c]))].map(r => r.map(csvCell).join(',')).join('\n');
+}
+
+/**
+ * The results as JSON for other tools (a Challonge upload, the rankings): the
+ * same rows as the CSV, plus each fighter's cards and the matchups not fought yet.
+ */
+export function resultsToJSON(pool, exportedAt = Date.now()) {
+	const name = id => pool.fighters.find(f => f.id === id)?.name ?? '';
+	return {
+		format: 'tsl-results',
+		version: 1,
+		exportedAt: new Date(exportedAt).toISOString(),
+		event: { ...pool.event },
+		groups: pool.groups.map(g => ({
+			name: g.name,
+			fighters: g.fighters.map(name),
+			unfought: pool.bouts.filter(b => b.group === g.id && !b.result && b.id !== pool.active).map(b => [name(b.a), name(b.b)]),
+		})),
+		fighters: pool.fighters.map(f => ({ name: f.name, charter: f.charter ?? '', cards: { ...f.cards } })),
+		bouts: resultRows(pool),
+	};
+}
+
 export function logToCSV(s) {
-	const esc = v => `"${String(v).replace(/"/g, '""')}"`;
 	const rows = [['time', 'round', 'clock', 'event', s.fighters[0].name, s.fighters[1].name, 'simuls']];
 	for (const e of s.log) {
 		rows.push([
@@ -1334,5 +1569,5 @@ export function logToCSV(s) {
 			e.simul,
 		]);
 	}
-	return rows.map(r => r.map(esc).join(',')).join('\n');
+	return rows.map(r => r.map(csvCell).join(',')).join('\n');
 }

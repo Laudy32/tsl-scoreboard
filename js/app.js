@@ -1,9 +1,10 @@
 import {
 	COLORS, Store, normalize, timeLeft, isRunning, hasStarted, leader, matchWinner,
-	formatClock, parseClock, fighterLabel, describeEvent, logToCSV,
+	formatClock, parseClock, fighterLabel, describeEvent, logToCSV, resultsToCSV, resultsToJSON,
 	MATCH_PRESETS, DIVISIONS, activePreset, presetNote, usesRounds, isTagTeam, isUntimed, tallyResult, decisionOf, MIN_JUDGES, medicalLeft, attemptLeft, boutDecided, poolStandings, restLeft,
-	CARD_REASONS, CARD_NAMES, hasCards,
+	CARD_REASONS, CARD_NAMES, hasCards, tableCardGroups, parseRoster,
 } from './state.js';
+import { tableCardsDocx } from './tablecards.js';
 
 const STORAGE_KEY = 'tsl_scoreboard';
 // A display opened in its own window (?view=display) only shows the score.
@@ -27,6 +28,18 @@ function load() {
 const loaded = load();
 const store = new Store(loaded.state);
 store.undoStack = loaded.undo;
+
+// The club roster lives in its own key: it is large and never part of undo.
+const ROSTER_KEY = 'tsl_roster';
+/** A roster built into a shared copy (`npm run build:single -- --roster file.csv`); empty here. */
+const BUNDLED_ROSTER = [];
+let roster = BUNDLED_ROSTER;
+try {
+	roster = JSON.parse(localStorage.getItem(ROSTER_KEY)) ?? BUNDLED_ROSTER;
+} catch {
+	roster = BUNDLED_ROSTER;
+}
+store.setRoster(roster);
 let lastSaved = '';
 
 store.subscribe(() => {
@@ -544,14 +557,28 @@ function renderHistory(s) {
 let renaming = null;
 
 /** A name's normal markup, or a text box with Save while that name is being edited. */
-function nameEditor(kind, id, name, normal) {
+function nameEditor(kind, id, name, normal, charter = null) {
 	if (renaming?.kind !== kind || renaming.id !== id) return normal;
-	return `<span class="inline rename"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" /><button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+	// A fighter's charter is edited beside the name, picked from the roster's charters or typed.
+	const charterBox = charter === null ? '' : `<input id="pool-charter" list="pool-charters" maxlength="40" value="${esc(charter)}" placeholder="Charter" autocomplete="off" />`;
+	return `<span class="inline rename${charter === null ? '' : ' with-charter'}"><input id="pool-rename" maxlength="${kind === 'group' ? 30 : 40}" value="${esc(name)}" autocomplete="off" />${charterBox}<button type="button" class="btn small" data-action="rename-save">Save</button></span>`;
+}
+
+/** Charters to pick from: the roster's, then any typed in this event. */
+function pickCharters(p) {
+	return [...new Set([...roster.map(r => r.charter), ...p.fighters.map(f => f.charter)].filter(Boolean))].sort();
+}
+
+/** Names offered when entering a matchup: this event's fighters first, then the roster. */
+function pickNames(p) {
+	const seen = new Set(p.fighters.map(f => f.name.toLowerCase()));
+	return [...p.fighters.map(f => f.name), ...roster.map(r => r.name).filter(n => !seen.has(n.toLowerCase()))];
 }
 
 function renderPool(s) {
 	const p = s.pool;
 	const g = p.groups.find(x => x.id === p.view);
+	const fought = p.bouts.some(b => b.result);
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
@@ -562,7 +589,7 @@ function renderPool(s) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
-		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Rename ${esc(f.name)}">${esc(f.name)}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
+		const chips = members.map(f => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}">${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
 		const bouts = mine.map(b => {
 			const r = b.result;
 			const status = r
@@ -574,7 +601,8 @@ function renderPool(s) {
 		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
 			${nameEditor('group', g.id, g.name, `<div class="group-title"><h3>${esc(g.name)}</h3><button type="button" class="btn small" data-action="rename" data-kind="group" data-id="${g.id}">Rename</button></div>`)}
-			<datalist id="pool-names">${p.fighters.map(f => `<option value="${esc(f.name)}"></option>`).join('')}</datalist>
+			<datalist id="pool-charters">${pickCharters(p).map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
+			<datalist id="pool-names">${pickNames(p).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
 			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
 			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Add every pairing</button></div>' : ''}
@@ -590,6 +618,27 @@ function renderPool(s) {
 			${groupAdd}
 		</section>
 		${body}
+		<section>
+			<h3>Roster${roster.length ? ` · ${roster.length}` : ''}</h3>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="roster-import">Import roster</button>
+				${roster.length ? '<button type="button" class="btn" data-action="roster-clear">Clear roster</button>' : ''}
+				<input type="file" id="roster-file" accept=".csv,.txt,text/csv,text/plain" hidden />
+			</div>
+		</section>
+		${p.groups.length ? `<section>
+			<h3>Results</h3>
+			<div class="event-fields">
+				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
+				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
+			</div>
+			<div class="row wrap">
+				<button type="button" class="btn" data-action="results-docx">Download table cards (Word)</button>
+				<button type="button" class="btn" data-action="results-csv" ${fought ? '' : 'disabled'}>Download results (CSV)</button>
+				<button type="button" class="btn" data-action="results-json" ${fought ? '' : 'disabled'}>Download results (JSON)</button>
+			</div>
+		</section>` : ''}
 		${p.groups.length ? '<div class="row"><button type="button" class="btn danger" data-action="pool-clear">Clear all</button></div>' : ''}
 	</form>`;
 }
@@ -809,23 +858,62 @@ function openDisplay() {
 	if (!win) setView('display');
 }
 
-function exportCSV() {
-	const blob = new Blob([logToCSV(store.state)], { type: 'text/csv' });
+function download(text, type, filename) {
 	const a = document.createElement('a');
-	const s = store.state;
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_');
+	a.href = URL.createObjectURL(new Blob([text], { type }));
+	a.download = filename;
 	a.click();
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function exportCSV() {
+	const s = store.state;
+	download(logToCSV(s), 'text/csv', `tsl-${fighterLabel(s, 0)}-vs-${fighterLabel(s, 1)}-${new Date().toISOString().slice(0, 10)}.csv`.replace(/[^\w.-]+/g, '_'));
+}
+
+function exportResults(kind) {
+	const pool = store.state.pool;
+	const name = `tsl-results-${new Date().toISOString().slice(0, 10)}.${kind}`;
+	if (kind === 'csv') download(resultsToCSV(pool), 'text/csv', name);
+	else download(JSON.stringify(resultsToJSON(pool), null, 1), 'application/json', name);
+}
+
+function saveRoster(list) {
+	roster = list;
+	store.setRoster(roster);
+	try {
+		// Kept even when empty, so a cleared roster doesn't come back from a built-in one.
+		localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
+	} catch {
+		// Storage full or blocked: the roster lasts until the page is closed.
+	}
+	refreshPool();
+}
+
+async function importRoster(file) {
+	const list = parseRoster(await file.text());
+	if (!list.length) {
+		await confirmAction('No names found in that file. Use a CSV with a name column, or one name per line.', 'OK');
+		return;
+	}
+	saveRoster(list);
+}
+
+async function exportTableCards() {
+	let logo = null;
+	try {
+		logo = new Uint8Array(await (await fetch('assets/emblem-256.png')).arrayBuffer());
+	} catch {
+		// No emblem (offline before it was cached): the cards still work without it.
+	}
+	const today = new Date().toISOString().slice(0, 10);
+	const docx = tableCardsDocx(tableCardGroups(store.state.pool), { date: today, logo });
+	download(docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', `tsl-table-cards-${today}.docx`);
+}
+
 function saveBackup() {
-	const blob = new Blob([JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1)], { type: 'application/json' });
-	const a = document.createElement('a');
-	a.href = URL.createObjectURL(blob);
-	a.download = `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`;
-	a.click();
-	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+	const text = JSON.stringify({ app: 'tsl-scoreboard', savedAt: new Date().toISOString(), state: store.state }, null, 1);
+	download(text, 'application/json', `tsl-backup-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.json`);
 }
 
 async function restoreBackup(file) {
@@ -847,6 +935,13 @@ async function restoreBackup(file) {
 const actions = {
 	'backup-save': saveBackup,
 	'backup-restore': () => $('#backup-file').click(),
+	'results-csv': () => exportResults('csv'),
+	'results-json': () => exportResults('json'),
+	'results-docx': exportTableCards,
+	'roster-import': () => $('#roster-file').click(),
+	'roster-clear': async () => {
+		if (await confirmAction(`Clear the roster of ${roster.length} fighters? Fighters already in matchups stay.`, 'Clear')) saveRoster([]);
+	},
 	clock: () => store.toggleClock(),
 	penalty: () => {
 		penalty = penalty ? null : { side: null, card: null, reason: null };
@@ -941,7 +1036,7 @@ const actions = {
 		const name = $('#pool-rename')?.value ?? '';
 		renaming = null;
 		if (kind === 'group') store.renamePoolGroup(id, name);
-		else if (kind === 'fighter') store.renamePoolFighter(id, name);
+		else if (kind === 'fighter') store.renamePoolFighter(id, name, $('#pool-charter')?.value ?? '');
 		refreshPool();
 	},
 	'pool-bout-remove': el => {
@@ -1066,6 +1161,17 @@ app.addEventListener('change', e => {
 	}
 });
 
+poolDialog.addEventListener('change', e => {
+	if (e.target.id === 'roster-file') {
+		const [file] = e.target.files;
+		e.target.value = '';
+		if (file) importRoster(file);
+		return;
+	}
+	const key = e.target.dataset.event;
+	if (key) store.setPoolEvent({ [key]: e.target.value });
+});
+
 // Settings fields apply as soon as they change.
 settingsDialog.addEventListener('input', e => {
 	const el = e.target;
@@ -1119,7 +1225,7 @@ poolDialog.addEventListener('keydown', e => {
 		return;
 	}
 	if (e.key !== 'Enter') return;
-	if (e.target.id === 'pool-rename') {
+	if (e.target.id === 'pool-rename' || e.target.id === 'pool-charter') {
 		e.preventDefault();
 		actions['rename-save']();
 	} else if (e.target.id === 'pool-group-name') {
