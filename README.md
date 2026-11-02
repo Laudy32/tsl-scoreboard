@@ -49,6 +49,7 @@ Rebuilt from Guangcong Luo's original [saber-legion](https://github.com/Zarel/sa
   by wins, then the win between tied fighters, then points for, then fewest against, with a 60 second rest when a
   fighter goes back to back. Cards stay with the fighter from bout to bout
 - Round wins shown as dots, with an optional "rounds to win the match"
+- Settings has three tabs (Match, Rules, Data). The control screen names the pool bout on the scoreboard ("Pool A · Match 2 of 6"). On a tablet or laptop (900px and wider) the clock and buttons sit on the left with large scores to tap on the right. The TV display keeps the scores still when the status line or a call appears, leaves a margin for TVs that crop their edges, and shows the event name when one is set
 - Undo for any scoring mistake (Z), with confirmations before resets
 - Full history of every action, downloadable as CSV
 - Roster: import the club roster once (the rankings' `ladder.csv`, any CSV

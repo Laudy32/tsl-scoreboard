@@ -374,9 +374,19 @@ kbd {
 /* Phone on its side: put the clock beside the scores. */
 @media (orientation: landscape) and (max-height: 500px) {
 	.control { max-width: none; display: grid; grid-template-columns: 1fr 1.6fr; align-items: start; }
-	.clock, .status-row, .actions, .help { grid-column: 1; }
-	.fighters { grid-column: 2; grid-row: 1 / span 4; }
+	.control > :not(.fighters) { grid-column: 1; }
+	.fighters { grid-column: 2; grid-row: 1 / span 20; }
 	.clock { font-size: 80px; }
+}
+/* Tablet or laptop: the clock and buttons on the left, big scores to tap on the right. */
+@media (min-width: 900px) {
+	.control { max-width: 1400px; display: grid; grid-template-columns: minmax(380px, 1fr) 1.7fr; gap: 14px 28px; align-items: start; }
+	.control > :not(.fighters) { grid-column: 1; }
+	.fighters { grid-column: 2; grid-row: 1 / span 20; }
+	.fighters .score-btn { min-height: min(62vh, 560px); }
+	.score-btn .score { font-size: clamp(120px, 14vw, 240px); }
+	.score-btn .name { font-size: clamp(22px, 2.4vw, 40px); }
+	.clock { font-size: clamp(64px, 6.5vw, 110px); }
 }
 
 /* --- dialogs --- */
@@ -446,7 +456,7 @@ dialog::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(2px); }
 
 .presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .presets.lengths .preset { padding: 8px 12px; }
-@media (max-width: 480px) { .presets { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .preset strong { font-size: 17px; } }
 .presets.lengths { grid-template-columns: repeat(3, 1fr); }
 .lengths-label { margin: 14px 0 6px; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .preset {
@@ -511,7 +521,8 @@ body[data-view=display] {
 	display: grid;
 	grid-template-rows: auto 1fr auto;
 	gap: 3vh;
-	padding: 2.5vh 3vw 3vh;
+	/* A margin all round keeps the clock and names clear of a TV that crops its edges. */
+	padding: 4.5vh 4vw;
 	cursor: none;
 }
 .d-top { text-align: center; }
@@ -546,7 +557,10 @@ body[data-view=display] {
 }
 .d-clock.up { color: var(--danger); }
 .d-clock.untimed { font-size: min(14vh, 11vw); text-transform: uppercase; color: var(--danger); }
+.d-slot { min-height: 12vh; }
 .d-status { min-height: 7vh; }
+.d-slot .d-status:empty { min-height: 0; }
+.d-event { margin-bottom: 1vh; font: 800 3.4vh/1 var(--display); letter-spacing: 0.2em; text-transform: uppercase; color: var(--label); }
 .d-switch { display: inline-block; margin-top: 1vh; padding: 0.6vh 2.5vw; border-radius: 1vh; background: var(--gold); color: #16120a; font: 900 5vh/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .d-status .status { font-size: 6vh; }
 .d-status .status-sub { margin-top: 1.2vh; font-size: 3.6vh; }
@@ -605,7 +619,7 @@ body[data-view=display] {
 	color: var(--gold);
 	padding-top: 1vh;
 }
-.d-foot span { display: block; margin-top: 0.8vh; font-size: 1.8vh; font-weight: 700; letter-spacing: 0.4em; color: #6d727a; }
+.d-foot span { display: block; margin-top: 0.8vh; font-size: 2.4vh; font-weight: 700; letter-spacing: 0.3em; color: #a3a9b2; }
 .d-back {
 	position: fixed;
 	top: calc(12px + env(safe-area-inset-top, 0px));
@@ -665,3 +679,27 @@ body[data-view=display] {
 .chip-charter { color: var(--muted); font-size: 0.85em; }
 .tied { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--gold); color: #16120a; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; vertical-align: 2px; }
 button.chip-label { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+
+/* --- review: header context, Matchups layout --- */
+.bout-context { text-align: center; font: 800 15px/1 var(--display); text-transform: uppercase; letter-spacing: 0.16em; color: var(--label); margin-bottom: -4px; }
+.chip.add { border-style: dashed; background: none; }
+.chip.add button { min-width: 44px; padding: 6px 12px; font-size: 20px; line-height: 1; }
+.chip.add.on { border-style: solid; }
+.pool-round { margin: 8px 0 -2px; font: 800 13px/1 var(--display); text-transform: uppercase; letter-spacing: 0.18em; color: var(--label); }
+.pool-round:first-child { margin-top: 0; }
+.pool-bout .chip-seed { margin-right: 2px; }
+.single-matchup { margin-top: 12px; }
+.single-matchup summary { cursor: pointer; padding: 8px 0; color: var(--muted); font: 700 13px/1 var(--body); text-transform: uppercase; letter-spacing: 0.08em; }
+.single-matchup .inline.matchup { margin-top: 4px; }
+.group-title .btn.on { border-color: var(--gold); }
+.event-fields { grid-template-columns: 1.6fr 1fr; }
+
+.sheet-head.with-tabs { flex-direction: column; align-items: stretch; gap: 12px; }
+.sheet-head-row { display: flex; justify-content: space-between; align-items: center; }
+.tabs { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--ink); border: 1px solid var(--line); }
+.tab { flex: 1; min-height: 44px; border: 0; border-radius: 9px; background: none; color: var(--muted); font: 800 16px/1 var(--display); text-transform: uppercase; letter-spacing: 0.1em; }
+.tab.on { background: var(--panel-2); color: var(--text); box-shadow: 0 0 0 1px var(--gold) inset; }
+.swatches { display: flex; gap: 6px; margin: 4px 0 12px; }
+.swatch { flex: 1 1 0; min-width: 30px; max-width: 44px; aspect-ratio: 1; border-radius: 50%; border: 2px solid transparent; background: var(--c); box-shadow: 0 0 0 1px rgba(255,255,255,.25); padding: 0; }
+.swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--c); }
+.field-label { font-size: 14px; font-weight: 700; color: #c7cbd1; }

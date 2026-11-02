@@ -170,6 +170,15 @@ function clockHTML(text) {
 
 // --- control view ---
 
+/** Which pool bout is on the scoreboard, e.g. "Pool A · Match 2 of 6". */
+function boutContext(s) {
+	const bout = s.pool.bouts.find(b => b.id === s.pool.active);
+	const group = bout && s.pool.groups.find(g => g.id === bout.group);
+	if (!group) return '';
+	const mine = s.pool.bouts.filter(b => b.group === group.id);
+	return `<div class="bout-context">${esc(group.name)} · Match ${mine.indexOf(bout) + 1} of ${mine.length}</div>`;
+}
+
 /**
  * Once the bout is over, the step that moves the event on is the main button:
  * a tiebreaker, the next round, the next pool match, or recording the last bout.
@@ -349,7 +358,7 @@ function renderControl(s) {
 			<img class="emblem" src="assets/emblem-256.png" alt="The Saber Legion" width="48" height="48" />
 			<div class="brand-text">
 				<span class="org">The Saber Legion</span>
-				<button class="round-pill" data-action="settings">${usesRounds(s) ? `Round ${s.round}` : 'Match'}${s.suddenDeath ? ' <span class="sd-tag">Sudden death</span>' : ''}</button>
+				<span class="round-pill">${usesRounds(s) ? `Round ${s.round}` : 'Match'}${s.suddenDeath ? ' <span class="sd-tag">Sudden death</span>' : ''}</span>
 			</div>
 		</div>
 		<div class="bar-actions">
@@ -359,6 +368,7 @@ function renderControl(s) {
 		</div>
 	</header>
 	<main class="control">
+		${boutContext(s)}
 		<button class="match-line" data-action="settings">
 			${divisionHTML(s, 'division')}
 			<span class="rules">${esc(rulesLine(s))}</span>
@@ -431,11 +441,17 @@ function renderDisplay(s) {
 	return `<main class="display${live ? '' : ' no-score'}" data-action="fullscreen">
 		<div class="d-top">
 			${divisionHTML(s, 'd-division')}
+			${s.pool.event.name ? `<div class="d-event">${esc(s.pool.event.name)}</div>` : ''}
 			${usesRounds(s) ? `<div class="d-round">Round ${s.round}</div>` : ''}
 			<div class="d-clock${timeLeft(s) === 0 ? ' up' : ''}${isUntimed(s) ? ' untimed' : ''}"><span data-clock>${clockHTML(clockText(s))}</span></div>
-			<div class="d-status">${statusLine(s)}</div>
-			${(() => { const r = restLeft(s); return r ? `<div class="d-switch">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div>` : ''; })()}
-			${s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue && timeLeft(s) > 0 ? '<div class="d-switch">Switch sides</div>' : ''}
+			${(() => {
+				// One slot of fixed height holds the status or a call (rest, medical, switch), so the scores don't move when it changes.
+				const r = restLeft(s);
+				const banner = (r ? `<div class="d-switch">${restNames(s, r)} rest <span data-rest>${restText(r)}</span></div>` : '')
+					+ (s.medical ? `<div class="d-switch">Medical hold <span data-medical>${medicalText(s)}</span></div>` : s.tagSwitch ? `<div class="d-switch">${switchText(s)}</div>` : s.sidesDue && timeLeft(s) > 0 ? '<div class="d-switch">Switch sides</div>' : '');
+				const status = statusLine(s);
+				return `<div class="d-slot"><div class="d-status">${banner && status.includes('>&nbsp;<') ? '' : status}</div>${banner}</div>`;
+			})()}
 		</div>
 		<div class="d-fighters">
 			${side(0)}
@@ -453,10 +469,15 @@ function renderDisplay(s) {
 
 // --- settings sheet ---
 
-function colorOptions(selected) {
-	return Object.entries(COLORS).map(([k, c]) =>
-		`<option value="${k}"${k === selected ? ' selected' : ''}>${c.label}</option>`).join('');
+/** A fighter's colour, picked from swatches. */
+function colorSwatches(side, selected) {
+	return `<div class="swatches" role="radiogroup" aria-label="Color">${Object.entries(COLORS).map(([k, c]) =>
+		`<button type="button" class="swatch${k === selected ? ' on' : ''}" style="--c:${c.hex}" role="radio" aria-checked="${k === selected}" aria-label="${c.label}" data-action="fighter-color" data-side="${side}" data-color="${k}"></button>`).join('')}</div>`;
 }
+
+/** Settings is split in three, so each part is short: this match, the rules, and the data. */
+const SETTINGS_TABS = [['match', 'Match'], ['rules', 'Rules'], ['data', 'Data']];
+let settingsTab = 'match';
 
 function presetsHTML(st) {
 	const preset = activePreset(st);
@@ -480,8 +501,8 @@ function renderSettings(s) {
 		return `<fieldset class="fighter-fields" style="--c:${hex(f.color)}">
 			<legend>${side === 0 ? 'Left' : 'Right'} fighter</legend>
 			<label>Name <input data-fighter="${side}" data-field="name" value="${esc(f.name)}" autocomplete="off" /></label>
-			<label>Subtitle <textarea data-fighter="${side}" data-field="subtitle" rows="2">${esc(f.subtitle)}</textarea></label>
-			<label>Color <select data-fighter="${side}" data-field="color">${colorOptions(f.color)}</select></label>
+			<label>Subtitle <input data-fighter="${side}" data-field="subtitle" value="${esc(f.subtitle)}" maxlength="60" autocomplete="off" /></label>
+			<div class="field-label">Color</div>${colorSwatches(side, f.color)}
 			${hasCards(f) ? `<div class="row">${cardChips(f)}<button type="button" class="btn small" data-action="clear-cards" data-side="${side}">Clear cards</button></div>` : ''}
 			${rounds ? `<label>Rounds won <input type="number" min="0" inputmode="numeric" data-wins="${side}" value="${f.wins}" /></label>` : ''}
 		</fieldset>`;
@@ -489,9 +510,8 @@ function renderSettings(s) {
 	const chip = (name, custom) => `<span class="chip${st.division === name ? ' on' : ''}">
 		<button type="button" data-action="division" data-division="${esc(name)}" aria-pressed="${st.division === name}">${esc(name)}</button>${custom ? `<button type="button" class="chip-x" data-action="remove-division" data-division="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>` : ''}
 	</span>`;
-	return `<form method="dialog" class="sheet-body">
-		<header class="sheet-head"><h2>Settings</h2><button class="btn small" value="close">Done</button></header>
-
+	const tabs = `<nav class="tabs" role="tablist">${SETTINGS_TABS.map(([id, label]) => `<button type="button" role="tab" class="tab${id === settingsTab ? ' on' : ''}" aria-selected="${id === settingsTab}" data-action="settings-tab" data-tab="${id}">${label}</button>`).join('')}</nav>`;
+	const match = `
 		<section>
 			<h3>Match type</h3>
 			<div id="presets">${presetsHTML(st)}</div>
@@ -523,8 +543,8 @@ function renderSettings(s) {
 					<span class="inline"><input id="time-left" value="${formatClock(timeLeft(s), { hundredths: false })}" inputmode="decimal" /><button type="button" class="btn small" data-action="set-time">Set</button></span>
 				</label>
 			</div>
-		</section>
-
+		</section>`;
+	const rulesPanel = `
 		<section>
 			<h3>Rules</h3>
 			<div class="two-col">
@@ -538,8 +558,8 @@ function renderSettings(s) {
 			<label class="check"><input type="checkbox" data-setting="pauseAfterScoring" ${st.pauseAfterScoring ? 'checked' : ''} /> Pause the clock after every point</label>
 			<label class="check"><input type="checkbox" data-setting="finalExchange" ${st.finalExchange ? 'checked' : ''} /> At 0:00, call a Final Exchange before deciding the winner</label>
 			<label class="check"><input type="checkbox" data-setting="sound" ${st.sound ? 'checked' : ''} /> Beep and vibrate at time calls and time up</label>
-		</section>
-
+		</section>`;
+	const data = `
 		<section>
 			<h3>Backup</h3>
 			<div class="row wrap">
@@ -555,7 +575,10 @@ function renderSettings(s) {
 				<button type="button" class="btn" data-action="new-match">New match, same fighters</button>
 				<button type="button" class="btn danger" data-action="reset-all">Reset everything</button>
 			</div>
-		</section>
+		</section>`;
+	return `<form method="dialog" class="sheet-body">
+		<header class="sheet-head with-tabs"><div class="sheet-head-row"><h2>Settings</h2><button class="btn small" value="close">Done</button></div>${tabs}</header>
+		${{ match, rules: rulesPanel, data }[settingsTab]}
 	</form>`;
 }
 
@@ -584,6 +607,10 @@ function renderHistory(s) {
 
 /** The group or fighter whose name is being edited in the Matchups sheet: { kind: 'group' | 'fighter', id }. */
 let renaming = null;
+/** Matchups sheet: adding a group, editing the order of bouts, and the manual matchup box of a round robin. */
+let addingGroup = false;
+let editingBouts = false;
+let manualMatchup = false;
 
 /** A name's normal markup, or a text box with Save while that name is being edited. */
 function nameEditor(kind, id, name, normal, charter = null) {
@@ -611,21 +638,30 @@ function renderPool(s) {
 	// A fighter on the scoreboard has cards the pool only learns about when the result is recorded.
 	const cardsOf = f => cardChips({ cards: (p.active !== null && s.fighters.find(x => x.poolId === f.id)?.cards) || f.cards });
 	const name = id => esc(p.fighters.find(f => f.id === id)?.name ?? '?');
-	const tabs = p.groups.map(x => `<span class="chip${x.id === g?.id ? ' on' : ''}"><button type="button" data-action="pool-group" data-id="${x.id}">${esc(x.name)}</button></span>`).join('');
-	const groupAdd = `<span class="inline"><input id="pool-group-name" maxlength="30" placeholder="${g ? 'New group' : 'Group name'}" autocomplete="off" /><button type="button" class="btn small" data-action="pool-group-add">${g ? 'New' : 'Create'}</button></span>`;
+	// Groups are tabs with a + at the end; the name box shows when adding, or when there is no group yet.
+	const tabs = p.groups.map(x => `<span class="chip${x.id === g?.id ? ' on' : ''}"><button type="button" data-action="pool-group" data-id="${x.id}">${esc(x.name)}</button></span>`).join('')
+		+ (g ? `<span class="chip add${addingGroup ? ' on' : ''}"><button type="button" data-action="pool-group-new" aria-label="New group" aria-expanded="${addingGroup}">${addingGroup ? '×' : '+'}</button></span>` : '');
+	const groupAdd = !g || addingGroup ? `<span class="inline"><input id="pool-group-name" maxlength="30" placeholder="Group name" autocomplete="off" /><button type="button" class="btn small" data-action="pool-group-add">Create</button></span>` : '';
 	let body = '';
 	if (g) {
 		const mine = p.bouts.filter(b => b.group === g.id);
 		const members = p.fighters.filter(f => g.fighters.includes(f.id));
 		const inBout = f => mine.some(b => b.a === f.id || b.b === f.id);
 		const chips = members.map((f, i) => renaming?.kind === 'fighter' && renaming.id === f.id ? nameEditor('fighter', f.id, f.name, '', f.charter ?? '') : `<span class="chip"><button type="button" class="chip-label" data-action="rename" data-kind="fighter" data-id="${f.id}" aria-label="Edit ${esc(f.name)}"><span class="chip-seed">${i + 1}</span> ${esc(f.name)}${f.charter ? ` <span class="chip-charter">${esc(f.charter)}</span>` : ''}${cardsOf(f)}</button>${inBout(f) ? '' : `<button type="button" class="chip-x" data-action="pool-remove" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">×</button>`}</span>`).join('');
-		const bouts = mine.map(b => {
+		// A round robin plays in rounds of half the fighters' worth of bouts, as on the table cards.
+		const perRound = Math.max(1, Math.floor(g.fighters.length / 2));
+		const seed = id => (g.robin ? `<span class="chip-seed">${g.fighters.indexOf(id) + 1}</span> ` : '');
+		const unfought = mine.some(b => !b.result && p.active !== b.id);
+		const editing = editingBouts && unfought;
+		const bouts = mine.map((b, i) => {
 			const r = b.result;
 			const status = r
 				? `<span class="pool-result">${r.scores[0]}–${r.scores[1]}${r.winner === null ? '' : ` · ${name(r.winner)}`}</span><button type="button" class="btn small" data-action="pool-undo" data-id="${b.id}">Take back</button>`
 				: p.active === b.id ? '<span class="pool-result">On scoreboard</span>'
-					: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-bout-move" data-dir="-1" data-id="${b.id}" aria-label="Move earlier">▲</button><button type="button" class="btn small" data-action="pool-bout-move" data-dir="1" data-id="${b.id}" aria-label="Move later">▼</button><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`;
-			return `<li class="pool-bout${r ? ' done' : ''}"><span>${name(b.a)} vs ${name(b.b)}</span>${status}</li>`;
+					: editing ? `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-bout-move" data-dir="-1" data-id="${b.id}" aria-label="Move earlier">▲</button><button type="button" class="btn small" data-action="pool-bout-move" data-dir="1" data-id="${b.id}" aria-label="Move later">▼</button><button type="button" class="btn small" data-action="pool-bout-remove" data-id="${b.id}" aria-label="Remove ${name(b.a)} vs ${name(b.b)}">✕</button></span>`
+						: `<span class="pool-actions"><button type="button" class="btn small" data-action="pool-load" data-id="${b.id}">Fight</button></span>`;
+			const round = g.robin && i % perRound === 0 ? `<li class="pool-round">Round ${Math.floor(i / perRound) + 1}</li>` : '';
+			return `${round}<li class="pool-bout${r ? ' done' : ''}"><span>${seed(b.a)}${name(b.a)} vs ${seed(b.b)}${name(b.b)}</span>${status}</li>`;
 		}).join('');
 		const table = poolStandings(p, g.id).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}${cardsOf(p.fighters.find(f => f.id === r.id))}${r.tied ? '<span class="tied">Tied</span>' : ''}</td><td class="num">${r.wins}</td><td class="num">${r.losses}</td><td class="num">${r.pointsFor}</td><td class="num">${r.pointsAgainst}</td></tr>`).join('');
 		body = `<section>
@@ -638,11 +674,15 @@ function renderPool(s) {
 			${members.length > 1 ? '<div class="row"><button type="button" class="btn" data-action="pool-build">Make pool matchups</button></div>' : ''}
 		</section>
 		<section>
-			<h3>Matchups</h3>
-			<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>
+			<div class="group-title"><h3>Matchups</h3>${unfought ? `<button type="button" class="btn small${editing ? ' on' : ''}" data-action="pool-bouts-edit" aria-pressed="${editing}">${editing ? 'Done' : 'Edit'}</button>` : ''}</div>
 			${bouts ? `<ul class="pool-bouts">${bouts}</ul>` : ''}
+			${(() => {
+				// Bracket groups are built a matchup at a time, so the box stays open; a round robin tucks it away.
+				const box = '<span class="inline matchup"><input id="pool-a" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><input id="pool-b" list="pool-names" maxlength="40" placeholder="Fighter" autocomplete="off" /><button type="button" class="btn small" data-action="pool-bout-add">Add</button></span>';
+				return g.robin ? `<details class="single-matchup" data-manual ${manualMatchup ? 'open' : ''}><summary>Add a single matchup</summary>${box}</details>` : box;
+			})()}
 		</section>
-		${g.robin ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
+		${g.robin && mine.some(b => b.result) ? `<section><h3>Standings</h3><table class="log"><thead><tr><th></th><th>Fighter</th><th class="num">W</th><th class="num">L</th><th class="num">PF</th><th class="num">PA</th></tr></thead><tbody>${table}</tbody></table></section>` : ''}
 		${mine.some(b => b.result || b.id === p.active) ? '' : `<div class="row"><button type="button" class="btn danger" data-action="pool-group-remove" data-id="${g.id}">Delete ${esc(g.name)}</button></div>`}`;
 	}
 	return `<form method="dialog" class="sheet-body">
@@ -650,7 +690,7 @@ function renderPool(s) {
 		<section>
 			<div class="event-fields">
 				<label>Event <input data-event="name" maxlength="60" value="${esc(p.event.name)}" placeholder="Event name" autocomplete="off" /></label>
-				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Regional" autocomplete="off" /></label>
+				<label>Tier <input data-event="tier" maxlength="60" list="event-tiers" value="${esc(p.event.tier)}" placeholder="Tier" autocomplete="off" /></label>
 				<datalist id="event-tiers"><option value="Regional"></option><option value="CS"></option></datalist>
 			</div>
 			${tabs ? `<div class="chips">${tabs}</div>` : ''}
@@ -864,6 +904,7 @@ function refreshSettings() {
 }
 
 function openSettings() {
+	settingsTab = 'match';
 	store.pause();
 	settingsDialog.innerHTML = renderSettings(store.state);
 	settingsDialog.showModal();
@@ -1031,15 +1072,29 @@ const actions = {
 	attempt: () => store.attempt(),
 	pool: () => {
 		renaming = null;
+		addingGroup = false;
+		editingBouts = false;
 		refreshPool();
 		poolDialog.showModal();
 	},
 	'pool-group': el => {
+		editingBouts = false;
 		store.selectPoolGroup(+el.dataset.id);
+		refreshPool();
+	},
+	'pool-group-new': () => {
+		addingGroup = !addingGroup;
+		refreshPool();
+		$('#pool-group-name')?.focus();
+	},
+	'pool-bouts-edit': () => {
+		editingBouts = !editingBouts;
 		refreshPool();
 	},
 	'pool-group-add': () => {
 		if (!store.addPoolGroup($('#pool-group-name').value)) return;
+		addingGroup = false;
+		editingBouts = false;
 		refreshPool();
 		$('#pool-a')?.focus();
 	},
@@ -1122,6 +1177,16 @@ const actions = {
 		if (await confirmAction(`End this ${what} now? The clock goes to zero.`, `End ${what}`)) store.endRoundNow();
 	},
 	settings: openSettings,
+	'settings-tab': el => {
+		settingsTab = el.dataset.tab;
+		refreshSettings();
+		settingsDialog.scrollTop = 0;
+	},
+	// The name may follow the color, so the sheet is drawn again.
+	'fighter-color': el => {
+		store.updateFighter(+el.dataset.side, { color: el.dataset.color });
+		refreshSettings();
+	},
 	history: openHistory,
 	display: openDisplay,
 	export: exportCSV,
@@ -1215,6 +1280,11 @@ app.addEventListener('change', e => {
 	}
 });
 
+// The tucked-away matchup box of a round robin stays as it was left when the sheet redraws.
+poolDialog.addEventListener('toggle', e => {
+	if (e.target.matches?.('[data-manual]')) manualMatchup = e.target.open;
+}, true);
+
 poolDialog.addEventListener('change', e => {
 	if (e.target.id === 'roster-file') {
 		const [file] = e.target.files;
@@ -1229,7 +1299,7 @@ poolDialog.addEventListener('change', e => {
 // Settings fields apply as soon as they change.
 settingsDialog.addEventListener('input', e => {
 	const el = e.target;
-	if (el.dataset.fighter !== undefined && el.dataset.field !== 'color') {
+	if (el.dataset.fighter !== undefined) {
 		store.updateFighter(+el.dataset.fighter, { [el.dataset.field]: el.value });
 	}
 });
@@ -1241,13 +1311,7 @@ settingsDialog.addEventListener('change', e => {
 		if (file) restoreBackup(file);
 		return;
 	}
-	if (el.dataset.fighter !== undefined && el.dataset.field === 'color') {
-		const side = +el.dataset.fighter;
-		store.updateFighter(side, { color: el.value });
-		// The name may have followed the color, and the fieldset accent changes.
-		el.closest('fieldset').style.setProperty('--c', hex(el.value));
-		settingsDialog.querySelector(`[data-fighter="${side}"][data-field="name"]`).value = store.state.fighters[side].name;
-	} else if (el.dataset.wins !== undefined) {
+	if (el.dataset.wins !== undefined) {
 		store.setWins(+el.dataset.wins, parseInt(el.value, 10));
 	} else if (el.id === 'round-number') {
 		store.setRound(parseInt(el.value, 10));
@@ -1267,7 +1331,9 @@ settingsDialog.addEventListener('change', e => {
 		}
 		store.updateSettings({ [key]: value });
 		// The match type buttons show which preset these rules now match.
-		$('#presets').innerHTML = presetsHTML(store.state.settings);
+		// The presets are on the Match tab only.
+		const presets = $('#presets');
+		if (presets) presets.innerHTML = presetsHTML(store.state.settings);
 	}
 });
 poolDialog.addEventListener('keydown', e => {
